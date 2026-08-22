@@ -15,7 +15,7 @@ RUN apt-get update \
 WORKDIR /app
 
 COPY requirements.txt ./
-RUN python -m pip install --upgrade pip && python -m pip install -r requirements.txt
+RUN python -m pip install -r requirements.txt
 
 # Pre-install the MCP server so the first WhatsApp message isn't slowed by npx.
 RUN npm install -g @playwright/mcp@latest
