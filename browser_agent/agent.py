@@ -10,6 +10,10 @@ Architecture (Phase 1, Twilio WhatsApp):
              -> vision fallback (screenshot -> Gemini) only if DOM read fails
         -> Twilio REST reply
 
+The MCP transport is chosen in `mcp_transport.py`: a local stdio subprocess for
+dev, a separate Cloud Run browser service in production. Nothing in this file
+changes between the two.
+
 Run locally with the ADK dev UI from the REPO ROOT (never from inside the
 agent folder):
 
@@ -21,71 +25,12 @@ from __future__ import annotations
 
 from google.adk.agents import Agent
 
-from .config import AGENT_MODEL, ARTIFACT_DIR, BROWSER_ALLOWED_ORIGINS, BROWSER_HEADLESS, DEMO_SITE_URL
+from .config import AGENT_MODEL, DEMO_SITE_URL
 from .guardrails import approve_pending_action, require_confirmation
+from .mcp_transport import build_playwright_toolset
 from .vision import read_screenshot_with_vision
 
-# --- MCP toolset import (name differs slightly across ADK versions) ---------
-try:  # ADK >= 1.x
-    from google.adk.tools.mcp_tool.mcp_toolset import McpToolset as _McpToolset
-except ImportError:  # older naming
-    from google.adk.tools.mcp_tool.mcp_toolset import MCPToolset as _McpToolset
-
-from google.adk.tools.mcp_tool.mcp_session_manager import StdioConnectionParams
-from mcp import StdioServerParameters
-
-
-def _playwright_mcp_args() -> list[str]:
-    args = [
-        "-y",
-        "@playwright/mcp@latest",
-        "--isolated",
-        "--browser",
-        "chromium",
-        "--caps",
-        "vision",
-        "--output-dir",
-        str(ARTIFACT_DIR),
-        "--image-responses",
-        "omit",  # keep WhatsApp turns cheap; vision fallback reads from disk
-        "--viewport-size",
-        "1280x900",
-    ]
-    if BROWSER_HEADLESS:
-        args.append("--headless")
-    if BROWSER_ALLOWED_ORIGINS:
-        args += ["--allowed-origins", BROWSER_ALLOWED_ORIGINS]
-    return args
-
-
-# Only the tools this agent actually needs. Keeping the surface small reduces
-# token cost and shrinks the blast radius of a bad model decision.
-PLAYWRIGHT_TOOL_FILTER = [
-    "browser_navigate",
-    "browser_navigate_back",
-    "browser_snapshot",
-    "browser_find",
-    "browser_click",
-    "browser_type",
-    "browser_fill_form",
-    "browser_select_option",
-    "browser_press_key",
-    "browser_wait_for",
-    "browser_take_screenshot",
-    "browser_tabs",
-    "browser_close",
-]
-
-playwright_toolset = _McpToolset(
-    connection_params=StdioConnectionParams(
-        server_params=StdioServerParameters(
-            command="npx",
-            args=_playwright_mcp_args(),
-        ),
-        timeout=180,
-    ),
-    tool_filter=PLAYWRIGHT_TOOL_FILTER,
-)
+playwright_toolset = build_playwright_toolset()
 
 
 INSTRUCTION = f"""

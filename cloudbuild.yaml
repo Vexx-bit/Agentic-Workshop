@@ -1,0 +1,33 @@
+# Builds the agent image and pushes it to Artifact Registry.
+#
+#   gcloud builds submit --config cloudbuild.yaml \
+#     --substitutions=_REGION=europe-west1
+#
+# The resulting image is then deployed to Cloud Run (see deploy/deploy.sh).
+
+substitutions:
+  _REGION: europe-west1
+  _REPO: agents
+  _IMAGE: whatsapp-browser-agent
+
+steps:
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_IMAGE}:latest
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_IMAGE}:$BUILD_ID
+      - .
+
+images:
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_IMAGE}:latest
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_IMAGE}:$BUILD_ID
+
+options:
+  machineType: E2_HIGHCPU_8
+  logging: CLOUD_LOGGING_ONLY
+
+# The Playwright base image is large; give the build room.
+timeout: 1800s

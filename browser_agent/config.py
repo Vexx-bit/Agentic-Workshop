@@ -27,6 +27,15 @@ ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
 BROWSER_HEADLESS = os.getenv("BROWSER_HEADLESS", "1") not in ("0", "false", "False", "")
 BROWSER_ALLOWED_ORIGINS = os.getenv("BROWSER_ALLOWED_ORIGINS", "").strip()
 
+# --- Playwright MCP transport ---
+# Empty  -> run the MCP server locally as a stdio subprocess (npx).
+# Set    -> talk to a remote Playwright MCP service over streamable HTTP,
+#           e.g. https://playwright-mcp-xxxx.europe-west1.run.app/mcp
+PLAYWRIGHT_MCP_URL = os.getenv("PLAYWRIGHT_MCP_URL", "").strip()
+# Audience for the Cloud Run ID token. Defaults to the service root derived
+# from PLAYWRIGHT_MCP_URL, which is what Cloud Run expects.
+PLAYWRIGHT_MCP_TOKEN_AUDIENCE = os.getenv("PLAYWRIGHT_MCP_TOKEN_AUDIENCE", "").strip()
+
 # --- Twilio ---
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
