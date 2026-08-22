@@ -1,5 +1,4 @@
-# Cloud Run image: Playwright base (Node + Chromium + deps) + Python 3.12.
-FROM mcr.microsoft.com/playwright:v1.55.0-jammy
+FROM mcr.microsoft.com/playwright:v1.55.0-noble
 
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
