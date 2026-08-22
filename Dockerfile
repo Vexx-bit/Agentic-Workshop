@@ -1,29 +1,27 @@
-# Cloud Run image: Python + Node (for @playwright/mcp) + Chromium deps.
-FROM python:3.12-slim
+# Cloud Run image: Playwright base (Node + Chromium + deps) + Python 3.12.
+FROM mcr.microsoft.com/playwright:v1.55.0-jammy
 
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    NODE_MAJOR=20 \
+    PIP_BREAK_SYSTEM_PACKAGES=1 \
     BROWSER_HEADLESS=1 \
-    BROWSER_ARTIFACT_DIR=/tmp/artifacts
+    BROWSER_ARTIFACT_DIR=/tmp/artifacts \
+    PORT=8080
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        curl ca-certificates gnupg \
-    && curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3.12 python3-pip \
+    && ln -sf /usr/bin/python3.12 /usr/local/bin/python \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 COPY requirements.txt ./
-RUN pip install -r requirements.txt
+RUN python -m pip install --upgrade pip && python -m pip install -r requirements.txt
 
-# Pre-install the MCP server and Chromium so the first request isn't slow.
-RUN npm install -g @playwright/mcp@latest playwright \
-    && npx playwright install --with-deps chromium
+# Pre-install the MCP server so the first WhatsApp message isn't slowed by npx.
+RUN npm install -g @playwright/mcp@latest
 
 COPY browser_agent ./browser_agent
 COPY server ./server
 
-ENV PORT=8080
-CMD ["sh", "-c", "uvicorn server.main:app --host 0.0.0.0 --port ${PORT}"]
+CMD ["sh", "-c", "python -m uvicorn server.main:app --host 0.0.0.0 --port ${PORT}"]
