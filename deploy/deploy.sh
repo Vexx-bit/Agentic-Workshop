@@ -12,7 +12,10 @@
 # NOTE ON THE BROWSER IMAGE: Cloud Run refuses to pull from
 # mcr.microsoft.com - it only accepts gcr.io, *-docker.pkg.dev and docker.io.
 # So we stand up an Artifact Registry *remote repository* that proxies MCR.
-# No local Docker needed; Artifact Registry does the mirroring on first pull.
+# No local Docker needed; Artifact Registry mirrors it on first pull.
+#
+# COST: defaults here are deliberately small. Both services scale to zero and
+# are capped at 1 instance. Override with env vars if you need more.
 
 set -euo pipefail
 
@@ -22,6 +25,14 @@ REPO="${REPO:-agents}"
 MCR_REPO="${MCR_REPO:-mcr-remote}"
 AGENT_SERVICE="${AGENT_SERVICE:-whatsapp-browser-agent}"
 MCP_SERVICE="${MCP_SERVICE:-playwright-mcp}"
+
+# Sizing (lean defaults - a demo does not need more than this).
+MCP_CPU="${MCP_CPU:-1}"
+MCP_MEMORY="${MCP_MEMORY:-2Gi}"
+MCP_MAX_INSTANCES="${MCP_MAX_INSTANCES:-1}"
+AGENT_CPU="${AGENT_CPU:-1}"
+AGENT_MEMORY="${AGENT_MEMORY:-512Mi}"
+AGENT_MAX_INSTANCES="${AGENT_MAX_INSTANCES:-2}"
 
 AGENT_IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/${AGENT_SERVICE}:latest"
 MCP_IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${MCR_REPO}/playwright/mcp:latest"
@@ -60,10 +71,10 @@ gcloud run deploy "${MCP_SERVICE}" \
   --image "${MCP_IMAGE}" \
   --region "${REGION}" \
   --no-allow-unauthenticated \
-  --cpu 2 --memory 4Gi \
+  --cpu "${MCP_CPU}" --memory "${MCP_MEMORY}" \
   --concurrency 1 \
   --timeout 600 \
-  --max-instances 3 \
+  --max-instances "${MCP_MAX_INSTANCES}" \
   --port 8080 \
   --args "--headless,--isolated,--browser,chromium,--caps,vision,--image-responses,omit,--viewport-size,1280x900,--port,8080,--host,0.0.0.0,--allowed-origins,${ALLOWED_ORIGINS}"
 
@@ -82,9 +93,9 @@ gcloud run deploy "${AGENT_SERVICE}" \
   --image "${AGENT_IMAGE}" \
   --region "${REGION}" \
   --allow-unauthenticated \
-  --cpu 1 --memory 1Gi \
+  --cpu "${AGENT_CPU}" --memory "${AGENT_MEMORY}" \
   --timeout 600 \
-  --max-instances 5 \
+  --max-instances "${AGENT_MAX_INSTANCES}" \
   --set-env-vars "PLAYWRIGHT_MCP_URL=${MCP_URL}/mcp,BROWSER_ARTIFACT_DIR=/tmp/artifacts,TWILIO_VALIDATE_SIGNATURE=1" \
   --set-secrets "GOOGLE_API_KEY=GOOGLE_API_KEY:latest,TWILIO_ACCOUNT_SID=TWILIO_ACCOUNT_SID:latest,TWILIO_AUTH_TOKEN=TWILIO_AUTH_TOKEN:latest"
 
