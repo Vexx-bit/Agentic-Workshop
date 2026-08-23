@@ -43,6 +43,7 @@ code{background:#eef1f5;border-radius:5px;padding:2px 6px;font-size:13px}
 code.todo{background:#fff8e1;border:1px dashed #d9b96b;color:#7a5c12}
 .say{background:#fff;border:1px solid var(--line);border-left:3px solid var(--brand);border-radius:8px;padding:9px 13px;margin:7px 0;font-size:15px}
 .no{background:#fff;border:1px solid var(--line);border-left:3px solid #d64545;border-radius:8px;padding:9px 13px;margin:7px 0;font-size:15px}
+.note{background:#fff;border:1px solid var(--line);border-radius:10px;padding:11px 14px;margin:14px 0 0;font-size:14px;color:var(--mute)}
 table{width:100%;border-collapse:collapse;background:#fff;font-size:14px;border:1px solid var(--line);border-radius:12px;overflow:hidden}
 th,td{text-align:left;padding:10px 13px;border-bottom:1px solid var(--line)}
 th{background:#fbfcfd;font-size:13px}
@@ -60,9 +61,8 @@ footer{padding:28px 0;color:var(--mute);font-size:13px}
 <div class="setup" id="setup">
   <b>Not configured yet &mdash; visible to you and to visitors.</b>
   Open <code>web/index.html</code>, scroll to the <code>CONFIG</code> object at the bottom,
-  and set <code>joinCode</code> to your sandbox phrase from the Twilio Console under
-  <i>Messaging &rsaquo; Try it out &rsaquo; Send a WhatsApp message</i>. It looks like
-  <code>join two-words</code> and is unique to your sandbox. Then redeploy.
+  and set <code>joinCode</code> to the phrase shown in the Twilio Console under
+  <i>Messaging &rsaquo; Try it out &rsaquo; Send a WhatsApp message</i>. Then redeploy.
 </div>
 
 <div class="hero">
@@ -85,13 +85,18 @@ footer{padding:28px 0;color:var(--mute);font-size:13px}
   <ol>
     <li><b>Save the number.</b> <code data-wa-number>loading</code> &mdash; or just tap
       <a data-wa href="#start">Open in WhatsApp</a>.</li>
-    <li><b>Join the sandbox.</b> Send <span data-join-wrap><code data-join>loading</code></span>.
-      This is a Twilio test number, so every new device sends this phrase once.
-      It must match your sandbox exactly &mdash; any other wording is refused.</li>
+    <li><b>Join the test environment.</b> Send <span data-join-wrap><code data-join>loading</code></span>.
+      This is a Twilio trial number, so every new device sends this phrase once.
+      It must match exactly &mdash; any other wording is refused.</li>
     <li><b>Link your account.</b> Send <code>link</code>. You get a private page that
       works once and expires in ten minutes. You sign in there, on HTTPS.</li>
     <li><b>Ask it something.</b> Try <code>what are my units</code>.</li>
   </ol>
+  <p class="note"><b>While this runs on a Twilio trial number,</b> only one phone can be
+  connected to the test environment at a time, and each device reconnects per session.
+  That is a limit of the trial messaging account, not of the agent: tokens, sessions and
+  storage keys are per student, and moving to a paid number lifts the cap without a code
+  change.</p>
 </section>
 
 <section id="can">
@@ -172,14 +177,16 @@ footer{padding:28px 0;color:var(--mute);font-size:13px}
 <script>
 // The only thing to edit. No secrets belong on this page.
 //
-// joinCode: the exact sandbox phrase from the Twilio Console, under
-//   Messaging > Try it out > Send a WhatsApp message. Looks like "join abc-def".
-//   Leave it empty rather than guessing: a wrong phrase is refused by Twilio,
-//   and a page that prints a plausible-but-wrong code sends people in circles.
+// waNumber: the WhatsApp number messages are sent to, digits only. On the new
+//   Twilio trial this is the trial number shown next to the QR code, which is
+//   NOT the classic sandbox number 14155238886. Read it from the console.
+// joinCode: the exact phrase shown beside it. On the trial flow this is
+//   "join twilio-trial"; classic sandboxes use a unique "join two-words".
+//   Leave it empty rather than guessing: a wrong phrase is refused by Twilio.
 const CONFIG = {
-  waNumber: "14155238886",   // Twilio WhatsApp sandbox number, digits only
-  joinCode: "",              // e.g. "join blue-tiger"
-  telegram: ""               // reserved for Phase 2
+  waNumber: "17372508034",       // Twilio trial WhatsApp number, digits only
+  joinCode: "join twilio-trial", // exact phrase from the console
+  telegram: ""                   // reserved for Phase 2
 };
 
 const joinCode = (CONFIG.joinCode || "").trim();
@@ -197,7 +204,7 @@ document.querySelectorAll("[data-wa-number]").forEach(function (el) {
 });
 
 document.querySelectorAll("[data-join]").forEach(function (el) {
-  el.textContent = configured ? joinCode : "your sandbox join phrase";
+  el.textContent = configured ? joinCode : "your join phrase";
   if (!configured) { el.className = "todo"; }
 });
 
