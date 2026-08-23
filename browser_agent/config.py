@@ -17,8 +17,12 @@ load_dotenv(Path(__file__).resolve().parent / ".env")
 APP_NAME = os.getenv("APP_NAME", "whatsapp_browser_agent")
 
 # --- Models ---
-AGENT_MODEL = os.getenv("AGENT_MODEL", "gemini-2.5-flash")
-VISION_MODEL = os.getenv("VISION_MODEL", "gemini-2.5-flash")
+# Kept in the environment on purpose: Google retires model IDs faster than we
+# can rebuild an image. gemini-2.5-flash started answering 404 NOT_FOUND
+# ("no longer available to new users") mid-build, and swapping this default is
+# the entire fix - no code change, no redeploy.
+AGENT_MODEL = os.getenv("AGENT_MODEL", "gemini-3.6-flash")
+VISION_MODEL = os.getenv("VISION_MODEL", "gemini-3.6-flash")
 
 # --- Browser / artifacts ---
 ARTIFACT_DIR = Path(os.getenv("BROWSER_ARTIFACT_DIR", str(REPO_ROOT / "artifacts"))).resolve()
@@ -32,15 +36,18 @@ BROWSER_ALLOWED_ORIGINS = os.getenv("BROWSER_ALLOWED_ORIGINS", "").strip()
 # Set    -> talk to a remote Playwright MCP service over streamable HTTP.
 PLAYWRIGHT_MCP_URL = os.getenv("PLAYWRIGHT_MCP_URL", "").strip()
 # Audience for the Cloud Run ID token. Defaults to the service root derived
-# from PLAYWRIGHT_MCP_URL, which is what Cloud Run expects.
+# from PLAYWRIGHT_MCP_URL, which is what Cloud Run expects. If the browser
+# service answers 403, the audience and the URL host have diverged - Cloud Run
+# services answer on two hostnames and the token must match the one called.
 PLAYWRIGHT_MCP_TOKEN_AUDIENCE = os.getenv("PLAYWRIGHT_MCP_TOKEN_AUDIENCE", "").strip()
 
 # --- Twilio ---
-# NOTE: a Twilio *trial* account cannot send free-form WhatsApp bodies over the
-# REST API - it returns HTTP 400 "trial accounts have limited parameter access"
-# and only accepts pre-approved templates (ContentSid). Agent replies are
-# arbitrary prose, so WhatsApp needs an upgraded account. Telegram below is the
-# no-cost alternative interface.
+# NOTE: a Twilio trial account cannot send free-form WhatsApp bodies over the
+# REST API - Messages.json answers 400 `21654 ContentSid Required` for any
+# `body`, on every sender including the sandbox. That restriction does not
+# apply to a TwiML response returned from the webhook, which is why
+# server/main.py answers WhatsApp inline instead of calling the API. No account
+# upgrade needed.
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
 TWILIO_WHATSAPP_FROM = os.getenv("TWILIO_WHATSAPP_FROM", "whatsapp:+14155238886")
