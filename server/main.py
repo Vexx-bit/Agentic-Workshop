@@ -1,16 +1,29 @@
 """FastAPI ingress for the study agent (Twilio WhatsApp + Telegram).
 
-Key constraint: a messaging webhook expects a response within seconds, and both
-browser automation and multi-step LMS work are slower than that. So we ACK
-immediately and do the real work in a background task, replying over the API.
+Why the two channels reply differently
+-------------------------------------
+Twilio trial accounts refuse free-form message bodies on the REST API:
+Messages.json answers 400 `21654 ContentSid Required` for any `body`, on every
+WhatsApp sender including the sandbox. Verified with a raw curl, so it is an
+account-level restriction, not a sender or code problem.
 
-Two interfaces, one agent:
-    POST /whatsapp        Twilio webhook (needs a non-trial Twilio account:
-                          trial accounts reject free-form bodies with HTTP 400
-                          "trial accounts have limited parameter access")
-    POST /telegram        Telegram webhook (free, no templates, no 24h window)
+A TwiML response returned *from the webhook* is not an API create, so it is not
+subject to that restriction. WhatsApp therefore answers inline, in the HTTP
+response to the inbound webhook.
 
-Shared routes:
+The cost of that is real and worth naming: the reply has to be ready before
+Twilio's webhook window closes. So an agent turn is raced against a budget. If
+it wins, the student gets the answer immediately. If it loses, we ack, let the
+task finish in the background, and stash the result - the student pulls it with
+`more`. Nothing is lost, nothing hangs.
+
+Telegram has no such restriction, so it keeps the cleaner ack-now/reply-later
+API path.
+
+Routes
+------
+    POST /whatsapp        Twilio webhook (replies with TwiML)
+    POST /telegram        Telegram webhook (replies over the Bot API)
     GET|POST /link/{id}   single-use page where a student links their own Moodle
     GET  /media/{id}      short-lived proxy for Moodle files
 
@@ -19,20 +32,18 @@ The channel is carried in the sender key: "whatsapp:+254..." or
 per-sender locks) is keyed off that string, so the two channels stay isolated
 from each other and per student.
 
-Health: GET /, /healthz and /healthz/ all return the same JSON. That
-redundancy is deliberate - a bare base URL returning 404 reads exactly like a
-dead deployment, and a trailing slash used to produce a 307 that curl silently
-does not follow.
+Health: GET /, /healthz and /healthz/ all return the same JSON.
 
 Run locally:
     uvicorn server.main:app --reload --port 8000
-    ngrok http 8000
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+from xml.sax.saxutils import escape as xml_escape
 
 from fastapi import BackgroundTasks, FastAPI, Form, Request, Response
 
@@ -54,9 +65,18 @@ app = FastAPI(title="Study Agent (WhatsApp + Telegram)")
 app.include_router(media_router)
 app.include_router(link_router)
 
-EMPTY_TWIML = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
-
 TELEGRAM_PREFIX = "telegram:"
+
+# Twilio gives a webhook roughly 15s before it gives up. Stay clearly inside it.
+TWIML_BUDGET_SECONDS = float(os.getenv("TWIML_BUDGET_SECONDS", "11"))
+
+# Twilio accepts several <Message> verbs per response; a handful keeps the
+# payload small while still delivering most answers in one shot.
+MAX_TWIML_MESSAGES = 3
+
+# Answers that did not fit the budget or the message cap, per sender.
+# In-memory is correct here: the service runs single-instance by design.
+_PENDING: dict[str, list[str]] = {}
 
 HELP_TEXT = (
     "Study assistant ready.\n\n"
@@ -77,17 +97,185 @@ HELP_TEXT = (
 LINK_WORDS = {"link", "link me", "connect", "login", "log in", "sign in"}
 UNLINK_WORDS = {"unlink", "forget me", "logout", "log out", "disconnect", "delete my data"}
 GREETINGS = {"hi", "hello", "help", "start", "/start", "menu"}
+MORE_WORDS = {"more", "next", "continue", "go on", "?"}
+
+STILL_WORKING = (
+    "Working on it - that one needs a few more seconds (reading your unit "
+    "material). Send: more"
+)
+
+
+# --------------------------------------------------------------------------- #
+# TwiML
+# --------------------------------------------------------------------------- #
+
+
+def _twiml(messages: list[str]) -> Response:
+    """Wraps zero or more message bodies in a TwiML response."""
+    body = "".join(f"<Message>{xml_escape(m)}</Message>" for m in messages if m)
+    return Response(
+        content='<?xml version="1.0" encoding="UTF-8"?>' f"<Response>{body}</Response>",
+        media_type="application/xml",
+    )
+
+
+def _twiml_text(sender: str, text: str) -> Response:
+    """Chunks text for WhatsApp, sends what fits, queues the rest for 'more'."""
+    parts = whatsapp.chunk(text)
+    if not parts:
+        return _twiml([])
+
+    head = parts[:MAX_TWIML_MESSAGES]
+    tail = parts[MAX_TWIML_MESSAGES:]
+    if tail:
+        _PENDING.setdefault(sender, []).extend(tail)
+        head = head[:-1] + [head[-1] + f"\n\n(...{len(tail)} more - send: more)"]
+    return _twiml(head)
+
+
+def _pop_pending(sender: str) -> list[str]:
+    queue = _PENDING.get(sender) or []
+    if not queue:
+        return []
+    taken, rest = queue[:MAX_TWIML_MESSAGES], queue[MAX_TWIML_MESSAGES:]
+    if rest:
+        _PENDING[sender] = rest
+        taken = taken[:-1] + [taken[-1] + f"\n\n(...{len(rest)} more - send: more)"]
+    else:
+        _PENDING.pop(sender, None)
+    return taken
+
+
+# --------------------------------------------------------------------------- #
+# Deterministic commands (no model in the path)
+# --------------------------------------------------------------------------- #
+
+
+def _link_text(sender: str) -> str:
+    """Mints a one-time link page. Deterministic: a confused model here would
+    strand a student, so the plain word 'link' never reaches the agent."""
+    base = (PUBLIC_BASE_URL or "").rstrip("/")
+    if not base:
+        return "Linking isn't configured on this deployment yet."
+    nonce = store.new_link_nonce(store.user_key_for(sender))
+    minutes = max(1, store.LINK_TTL_SECONDS // 60)
+    return (
+        "Open this to sign in to your e-learning account:\n"
+        f"{base}/link/{nonce}\n\n"
+        f"It works once and expires in {minutes} minutes. Your password is "
+        "exchanged for an access token and is never saved, logged, or typed "
+        "into this chat."
+    )
+
+
+def _unlink_text(sender: str) -> str:
+    if moodle.forget_token(store.user_key_for(sender)):
+        return (
+            "Done - your stored e-learning access has been deleted. Send 'link' "
+            "if you want to connect again."
+        )
+    return "You weren't linked, so there was nothing to delete."
+
+
+def _fast_text(sender: str, body: str) -> str | None:
+    """Returns a reply for commands that need no agent turn, else None."""
+    lowered = body.lower()
+
+    if lowered in GREETINGS:
+        return HELP_TEXT
+    if lowered in LINK_WORDS:
+        return _link_text(sender)
+    if lowered in UNLINK_WORDS:
+        return _unlink_text(sender)
+    # Never accept credentials over chat, even if offered unprompted.
+    if "password" in lowered and (":" in body or "=" in body):
+        return (
+            "Don't send passwords here - this chat is stored. Send 'link' and "
+            "type it once on the secure page instead."
+        )
+    if not body:
+        return "Send me a text instruction (media isn't supported yet)."
+    return None
+
+
+def _failure_text(exc: BaseException) -> str:
+    return (
+        f"Something broke while working on that: {type(exc).__name__}. Try again "
+        "with a simpler request, or send 'help' to see what I can do."
+    )
+
+
+# --------------------------------------------------------------------------- #
+# WhatsApp: answer inside the webhook response
+# --------------------------------------------------------------------------- #
+
+
+async def _agent_text(sender: str, body: str) -> str | None:
+    """Races an agent turn against the webhook budget.
+
+    Returns the answer if it finished in time. Otherwise returns None and lets
+    the task keep running, stashing its result for the next 'more'.
+    """
+    task = asyncio.create_task(run_turn(sender, body))
+    done, _pending = await asyncio.wait({task}, timeout=TWIML_BUDGET_SECONDS)
+
+    if task in done:
+        try:
+            return task.result()
+        except Exception as exc:
+            logger.exception("agent turn failed")
+            return _failure_text(exc)
+
+    def _stash(finished: asyncio.Task) -> None:
+        try:
+            text = finished.result()
+        except Exception as exc:  # noqa: BLE001 - reported to the student
+            logger.exception("agent turn failed after the webhook returned")
+            text = _failure_text(exc)
+        _PENDING.setdefault(sender, []).extend(whatsapp.chunk(text))
+        logger.info("queued a late answer for %s", sender)
+
+    task.add_done_callback(_stash)
+    logger.info("turn for %s exceeded the twiml budget; queued", sender)
+    return None
+
+
+# --------------------------------------------------------------------------- #
+# Telegram: ack now, reply over the API
+# --------------------------------------------------------------------------- #
 
 
 def _reply(sender: str, text: str) -> None:
-    """Sends text back over whichever channel the sender came from.
-
-    One dispatch point, so no caller has to know about transports.
-    """
     if sender.startswith(TELEGRAM_PREFIX):
         telegram.send(sender[len(TELEGRAM_PREFIX):], text)
     else:
         whatsapp.send(sender, text)
+
+
+async def _handle(sender: str, body: str) -> None:
+    try:
+        reply = await run_turn(sender, body)
+    except Exception as exc:  # never leave the user hanging
+        logger.exception("agent turn failed")
+        reply = _failure_text(exc)
+    try:
+        _reply(sender, reply)
+    except Exception:
+        logger.exception("failed to send reply to %s", sender)
+
+
+def _dispatch(sender: str, body: str, background: BackgroundTasks) -> None:
+    fast = _fast_text(sender, body)
+    if fast is not None:
+        background.add_task(_reply, sender, fast)
+        return
+    background.add_task(_reply, sender, "On it...")
+    background.add_task(_handle, sender, body)
+
+
+# --------------------------------------------------------------------------- #
+# Signature check
+# --------------------------------------------------------------------------- #
 
 
 def _validate_signature(request: Request, form: dict) -> bool:
@@ -102,103 +290,25 @@ def _validate_signature(request: Request, form: dict) -> bool:
     signature = request.headers.get("X-Twilio-Signature", "")
     base = PUBLIC_BASE_URL or str(request.base_url).rstrip("/")
     url = f"{base}{request.url.path}"
-    return RequestValidator(TWILIO_AUTH_TOKEN).validate(url, form, signature)
-
-
-def _send_link(sender: str) -> None:
-    """Mints and sends a link page. Deterministic: no model in the path.
-
-    Linking is the one step where a confused model would strand a student, so
-    the plain word 'link' is handled here rather than as a tool call.
-    """
-    base = (PUBLIC_BASE_URL or "").rstrip("/")
-    if not base:
-        _reply(sender, "Linking isn't configured on this deployment yet.")
-        return
-    nonce = store.new_link_nonce(store.user_key_for(sender))
-    minutes = max(1, store.LINK_TTL_SECONDS // 60)
-    _reply(
-        sender,
-        "Open this to sign in to your e-learning account:\n"
-        f"{base}/link/{nonce}\n\n"
-        f"It works once and expires in {minutes} minutes. Your password is "
-        "exchanged for an access token and is never saved, logged, or typed "
-        "into this chat.",
-    )
-
-
-def _do_unlink(sender: str) -> None:
-    was_linked = moodle.forget_token(store.user_key_for(sender))
-    _reply(
-        sender,
-        "Done - your stored e-learning access has been deleted. Send 'link' if "
-        "you want to connect again."
-        if was_linked
-        else "You weren't linked, so there was nothing to delete.",
-    )
-
-
-async def _handle(sender: str, body: str) -> None:
-    """Background worker: run the agent, then reply on the sender's channel."""
-    try:
-        reply = await run_turn(sender, body)
-    except Exception as exc:  # never leave the user hanging
-        logger.exception("agent turn failed")
-        reply = (
-            "Something broke while working on that: "
-            f"{type(exc).__name__}. Try again with a simpler request, or send "
-            "'help' to see what I can do."
+    ok = RequestValidator(TWILIO_AUTH_TOKEN).validate(url, form, signature)
+    if not ok:
+        # Log what we signed against - a scheme or host mismatch is invisible
+        # otherwise, and this check has already cost hours once.
+        logger.warning(
+            "signature mismatch: signed_url=%r fields=%d has_header=%s",
+            url,
+            len(form),
+            bool(signature),
         )
-
-    try:
-        _reply(sender, reply)
-    except Exception:
-        logger.exception("failed to send reply to %s", sender)
+    return ok
 
 
-def _dispatch(sender: str, body: str, background: BackgroundTasks) -> None:
-    """Channel-agnostic command routing. Queues work; never blocks."""
-    lowered = body.lower()
-
-    if lowered in GREETINGS:
-        background.add_task(_reply, sender, HELP_TEXT)
-        return
-
-    if lowered in LINK_WORDS:
-        background.add_task(_send_link, sender)
-        return
-
-    if lowered in UNLINK_WORDS:
-        background.add_task(_do_unlink, sender)
-        return
-
-    # Never accept credentials over chat, even if offered unprompted.
-    if "password" in lowered and (":" in body or "=" in body):
-        background.add_task(
-            _reply,
-            sender,
-            "Don't send passwords here - this chat is stored. Send 'link' and "
-            "type it once on the secure page instead.",
-        )
-        return
-
-    if not body:
-        background.add_task(
-            _reply, sender, "Send me a text instruction (media isn't supported yet)."
-        )
-        return
-
-    # Fast ack + async work: this is the non-negotiable timeout rule.
-    background.add_task(_reply, sender, "On it\u2026")
-    background.add_task(_handle, sender, body)
+# --------------------------------------------------------------------------- #
+# Health
+# --------------------------------------------------------------------------- #
 
 
 def _health() -> dict:
-    """Everything needed to tell a live deploy from a stale one, in one GET.
-
-    link_store is the load-bearing field: it proves the token store actually
-    initialised, which is what decides whether students stay linked.
-    """
     return {
         "status": "ok",
         "service": "whatsapp-study-agent",
@@ -206,6 +316,7 @@ def _health() -> dict:
         "revision": os.getenv("K_REVISION", "local"),
         "linking_configured": bool((PUBLIC_BASE_URL or "").strip()),
         "telegram_configured": telegram.configured(),
+        "whatsapp_reply_mode": "twiml",
     }
 
 
@@ -228,7 +339,6 @@ async def healthz_slash() -> dict:
 @app.post("/whatsapp")
 async def whatsapp_webhook(
     request: Request,
-    background: BackgroundTasks,
     From: str = Form(default=""),
     Body: str = Form(default=""),
 ) -> Response:
@@ -242,10 +352,23 @@ async def whatsapp_webhook(
     body = (Body or form.get("Body", "")).strip()
     logger.info("inbound whatsapp from %s: %s", sender, body[:200])
 
-    if sender:
-        _dispatch(sender, body, background)
+    if not sender:
+        return _twiml([])
 
-    return Response(content=EMPTY_TWIML, media_type="application/xml")
+    if body.lower() in MORE_WORDS:
+        queued = _pop_pending(sender)
+        if queued:
+            return _twiml(queued)
+        return _twiml_text(sender, "Nothing queued. Ask me something.")
+
+    fast = _fast_text(sender, body)
+    if fast is not None:
+        return _twiml_text(sender, fast)
+
+    answer = await _agent_text(sender, body)
+    if answer is None:
+        return _twiml_text(sender, STILL_WORKING)
+    return _twiml_text(sender, answer)
 
 
 @app.post("/telegram")
