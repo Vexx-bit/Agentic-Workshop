@@ -6,7 +6,18 @@ This Moodle reports ``limitconcurrentlogins: 1``: one interactive session per
 user. Driving it with Playwright would open a second session and can evict the
 student from their own browser mid-class. Web-service token calls do not go
 through the interactive session path, so every Moodle interaction lives in this
-module and none of it goes through the browser toolset.
+module and none of it goes through the browser toolset. That is also what makes
+many students at once possible: token calls are stateless, so twenty students
+can be served concurrently without fighting over one session.
+
+One token per student
+---------------------
+Each student links their own account through the HTTPS page in
+``server/link.py``. Their token is stored under an opaque key (a salted hash of
+their phone number) and carries only their own permissions, so the agent cannot
+read another student's coursework even if it tried. The key is read from the ADK
+session, never from a model argument, so the model cannot ask for someone
+else's data by guessing a key.
 
 Safety model
 ------------
@@ -23,14 +34,14 @@ Safety model
 
 What this module deliberately cannot do
 ---------------------------------------
-It cannot submit coursework, start or answer a quiz, or write a grade. Those
-functions are exposed by the site's mobile service, and a student token would
-be refused for most of them anyway, but they are blocked here explicitly so the
-answer does not depend on Moodle's capability checks holding.
+It cannot submit coursework, start or answer a quiz, or write a grade. The
+helpful thing is the opposite direction: fetch the brief, the questions and the
+notes, so the student can do the work and submit it themselves.
 """
 
 from __future__ import annotations
 
+import re
 import secrets
 import time
 from datetime import datetime, timezone
@@ -38,13 +49,16 @@ from typing import Any
 
 import requests
 
-from . import config
+from . import config, store
 
 REST_PATH = "/webservice/rest/server.php"
 TOKEN_PATH = "/login/token.php"
 MOBILE_SERVICE = "moodle_mobile_app"
 HTTP_TIMEOUT = 30
 FILE_TIMEOUT = 60
+
+# ADK session-state key holding this student's opaque key. Set by server/runner.
+USER_KEY_STATE = "user_key"
 
 # ---------------------------------------------------------------------------
 # Allowlist / denylist
@@ -118,7 +132,7 @@ DENIED_FUNCTIONS = frozenset(
 
 # Error codes that mean "this student's token is no longer usable". There is no
 # way to refresh silently, because we never keep the password. The honest
-# response is to ask them to re-link.
+# response is to ask them to link again.
 RELINK_CODES = frozenset({"invalidtoken", "accessexception", "sessionexpired"})
 
 
@@ -136,38 +150,47 @@ class MoodleError(RuntimeError):
 
 
 # ---------------------------------------------------------------------------
-# Token provision
+# Per-student tokens
 # ---------------------------------------------------------------------------
-#
-# Phase 1: one token from the environment, so the demo runs today.
-# Phase 2: the link-exchange flow calls set_token_for() with a token minted from
-#          the student's own password, keyed by an opaque per-student key (a
-#          hash of their WhatsApp number). Only this section changes; every tool
-#          below already threads user_key through.
-#
-# A student's token carries only that student's permissions, so the agent cannot
-# read another student's coursework even if it tried.
-
-_TOKEN_STORE: dict[str, str] = {}
 
 
-def set_token_for(user_key: str, token: str) -> None:
+def _key(tool_context: Any = None) -> str:
+    """Reads this student's opaque key out of the ADK session state.
+
+    Deliberately not a model-supplied argument: if the model could pass a key,
+    it could be talked into passing someone else's.
+    """
+    if tool_context is None:
+        return ""
+    state = getattr(tool_context, "state", None)
+    if state is None:
+        return ""
+    try:
+        return str(state.get(USER_KEY_STATE) or "")
+    except Exception:
+        return ""
+
+
+def set_token_for(user_key: str, token: str, moodle_userid: Any = None) -> None:
     """Registers a student's own Moodle token under an opaque key."""
-    _TOKEN_STORE[user_key] = token
+    store.put_token(user_key, token, moodle_userid)
 
 
 def forget_token(user_key: str) -> bool:
-    """Deletes a student's stored token. Backs the `forget me` command."""
-    return _TOKEN_STORE.pop(user_key, None) is not None
+    """Deletes a student's stored token. Backs the `unlink` command."""
+    return store.delete_token(user_key)
 
 
 def has_token(user_key: str) -> bool:
-    return bool(_TOKEN_STORE.get(user_key) or config.MOODLE_TOKEN)
+    return bool(store.get_token(user_key) or config.MOODLE_TOKEN)
 
 
 def _token_for(user_key: str | None) -> str:
-    if user_key and user_key in _TOKEN_STORE:
-        return _TOKEN_STORE[user_key]
+    if user_key:
+        token = store.get_token(user_key)
+        if token:
+            return token
+    # Single-token fallback, for local dev and the solo demo path.
     return config.MOODLE_TOKEN
 
 
@@ -183,7 +206,8 @@ def exchange_password_for_token(username: str, password: str) -> str:
 
     The password is used once, inside this function, and is never stored,
     logged, or returned. Call this only from the HTTPS link page - never from a
-    chat message, because chat messages are logged and can be read later.
+    chat message, because chat messages are stored on the phone and in Twilio's
+    logs, and can be read later.
     """
     response = requests.post(
         _base_url() + TOKEN_PATH,
@@ -203,6 +227,20 @@ def exchange_password_for_token(username: str, password: str) -> str:
             payload.get("error", "Moodle refused the login."),
         )
     return str(token)
+
+
+def whoami(user_key: str) -> dict:
+    """Confirms a freshly stored token works, and returns who it belongs to.
+
+    Used by the link page to show the student their own name, which is a much
+    better confirmation than the word 'success'.
+    """
+    info = _call("core_webservice_get_site_info", user_key=user_key)
+    return {
+        "userid": info.get("userid"),
+        "fullname": info.get("fullname"),
+        "username": info.get("username"),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -249,7 +287,7 @@ def _call(
 
     token = _token_for(user_key)
     if not token:
-        raise MoodleError("notoken", "No Moodle token is available for this user.")
+        raise MoodleError("notoken", "This student has not linked Moodle yet.")
 
     payload: dict[str, Any] = {
         "wstoken": token,
@@ -281,12 +319,22 @@ def _user_id(user_key: str | None = None) -> int:
 
 def _fail(error: MoodleError) -> dict:
     """Turns a MoodleError into a result the model can explain to the user."""
+    if error.errorcode == "notoken":
+        return {
+            "status": "link_required",
+            "error_message": (
+                "This student has not linked their Moodle account yet. Call "
+                "link_my_moodle and send them the link. Never ask for a "
+                "password in chat."
+            ),
+        }
     if error.needs_relink:
         return {
             "status": "relink_required",
             "error_message": (
-                "This student's Moodle link is no longer valid. Ask them to "
-                "re-link, and do not ask for their password in chat."
+                "This student's Moodle link is no longer valid. Call "
+                "link_my_moodle and send them a fresh link, and do not ask "
+                "for their password in chat."
             ),
         }
     return {"status": "error", "error_code": error.errorcode, "error_message": error.message}
@@ -298,10 +346,8 @@ def _fail(error: MoodleError) -> dict:
 #
 # A Moodle file URL only works with the wstoken appended. Handing that URL to
 # Twilio would give a live credential to a third party and write it into their
-# logs, so we never do. Files are registered here and served from our own
-# domain by server/media.py until the entry expires.
-
-_MEDIA: dict[str, dict[str, Any]] = {}
+# logs, so we never do. Files are registered in the shared store and served
+# from our own domain by server/media.py until the entry expires.
 
 
 def register_file(
@@ -310,22 +356,18 @@ def register_file(
     mimetype: str = "",
     user_key: str = "",
 ) -> str:
-    _prune_media()
     media_id = secrets.token_urlsafe(24)
-    _MEDIA[media_id] = {
-        "url": file_url,
-        "filename": filename,
-        "mimetype": mimetype,
-        "token": _token_for(user_key or None),
-        "expires": time.time() + config.MOODLE_MEDIA_TTL_SECONDS,
-    }
+    store.put_media(
+        media_id,
+        {
+            "url": file_url,
+            "filename": filename,
+            "mimetype": mimetype,
+            "token": _token_for(user_key or None),
+        },
+        config.MOODLE_MEDIA_TTL_SECONDS,
+    )
     return media_id
-
-
-def _prune_media() -> None:
-    now = time.time()
-    for media_id in [k for k, v in _MEDIA.items() if v["expires"] < now]:
-        _MEDIA.pop(media_id, None)
 
 
 def fetch_media(media_id: str) -> tuple[bytes, str, str]:
@@ -334,19 +376,22 @@ def fetch_media(media_id: str) -> tuple[bytes, str, str]:
     Raises:
         KeyError: if the id is unknown or has expired.
     """
-    entry = _MEDIA.get(media_id)
-    if not entry or entry["expires"] < time.time():
-        _MEDIA.pop(media_id, None)
+    entry = store.get_media(media_id)
+    if not entry:
         raise KeyError(media_id)
 
-    url = entry["url"]
+    url = str(entry.get("url") or "")
     # Moodle file URLs frequently already carry ?forcedownload=1.
     joiner = "&" if "?" in url else "?"
     response = requests.get(
-        url + joiner + "token=" + entry["token"], timeout=FILE_TIMEOUT
+        url + joiner + "token=" + str(entry.get("token") or ""), timeout=FILE_TIMEOUT
     )
     response.raise_for_status()
-    return response.content, entry["filename"], entry["mimetype"]
+    return (
+        response.content,
+        str(entry.get("filename") or "file"),
+        str(entry.get("mimetype") or ""),
+    )
 
 
 def media_path(media_id: str) -> str:
@@ -355,23 +400,87 @@ def media_path(media_id: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Agent tools
+# Linking tools
 # ---------------------------------------------------------------------------
 
 
-def list_my_courses(user_key: str = "") -> dict:
+def link_my_moodle(tool_context: Any = None) -> dict:
+    """Creates a private, single-use link for this student to connect Moodle.
+
+    Use this whenever a Moodle tool reports status link_required or
+    relink_required. The link opens a page on this service where the student
+    types their own Moodle username and password once. Never ask for a
+    password in the chat itself.
+
+    Returns:
+        dict: status, the link to send, and how long it stays valid.
+    """
+    user_key = _key(tool_context)
+    if not user_key:
+        return {
+            "status": "error",
+            "error_message": (
+                "This session has no per-student key, so no link can be issued."
+            ),
+        }
+
+    base = (config.PUBLIC_BASE_URL or "").rstrip("/")
+    if not base:
+        return {
+            "status": "error",
+            "error_message": "PUBLIC_BASE_URL is not set, so the link page has no address.",
+        }
+
+    nonce = store.new_link_nonce(user_key)
+    return {
+        "status": "success",
+        "link": f"{base}/link/{nonce}",
+        "expires_in_minutes": max(1, store.LINK_TTL_SECONDS // 60),
+        "already_linked": bool(store.get_token(user_key)),
+        "message": (
+            "Send this link to the student as-is. It works once and then dies. "
+            "Tell them their password is exchanged for a token and discarded "
+            "immediately, and that they can send 'unlink' at any time."
+        ),
+    }
+
+
+def unlink_my_moodle(tool_context: Any = None) -> dict:
+    """Forgets this student's stored Moodle token.
+
+    After this the agent can no longer see any of their coursework until they
+    link again. It does not change anything inside Moodle itself.
+
+    Returns:
+        dict: status and a short confirmation.
+    """
+    user_key = _key(tool_context)
+    if not user_key:
+        return {"status": "error", "error_message": "No per-student key in this session."}
+
+    if forget_token(user_key):
+        return {
+            "status": "success",
+            "message": "Moodle token deleted. This student is no longer linked.",
+        }
+    return {"status": "not_linked", "message": "There was no stored token to delete."}
+
+
+# ---------------------------------------------------------------------------
+# Read tools
+# ---------------------------------------------------------------------------
+
+
+def list_my_courses(tool_context: Any = None) -> dict:
     """Lists the Moodle units this student is enrolled in, with progress.
 
     Hidden site-admin courses (orientation, contacts, timetables) are filtered
     out, because they are noise for a student asking about their units.
 
-    Args:
-        user_key (str): Opaque per-student key. Empty string uses the single
-            configured token.
-
     Returns:
         dict: status, plus a list of units with id, code, name and percent.
     """
+    user_key = _key(tool_context)
     try:
         courses = _call(
             "core_enrol_get_users_courses",
@@ -397,23 +506,26 @@ def list_my_courses(user_key: str = "") -> dict:
     return {"status": "success", "units": units}
 
 
-def whats_due_soon(days_ahead: int = 14, user_key: str = "") -> dict:
+def whats_due_soon(days_ahead: int = 14, tool_context: Any = None) -> dict:
     """Lists upcoming Moodle deadlines across all of this student's units.
+
+    An empty list is a real answer, not a failure: late in a semester every
+    deadline can already be behind them. Say so plainly rather than guessing.
 
     Args:
         days_ahead (int): How far forward to look, in days.
-        user_key (str): Opaque per-student key.
 
     Returns:
-        dict: status, plus a list of events with name, unit and due timestamp.
+        dict: status, plus a list of events with name, unit and due date.
     """
+    user_key = _key(tool_context)
     now = int(time.time())
     try:
         payload = _call(
             "core_calendar_get_action_events_by_timesort",
             {
                 "timesortfrom": now,
-                "timesortto": now + days_ahead * 86400,
+                "timesortto": now + max(1, days_ahead) * 86400,
                 "limitnum": 20,
             },
             user_key=user_key or None,
@@ -431,13 +543,12 @@ def whats_due_soon(days_ahead: int = 14, user_key: str = "") -> dict:
                 "unit": course.get("shortname") or course.get("fullname"),
                 "due_iso": _iso(timestamp),
                 "activity": event.get("modulename"),
-                "cmid": (event.get("action") or {}).get("itemcount") and event.get("instance"),
             }
         )
     return {"status": "success", "days_ahead": days_ahead, "events": events}
 
 
-def list_course_notes(course_id: int, user_key: str = "") -> dict:
+def list_course_notes(course_id: int, tool_context: Any = None) -> dict:
     """Lists the downloadable notes and slides in one unit.
 
     Each file gets a short-lived link on this service's own domain. The Moodle
@@ -445,11 +556,11 @@ def list_course_notes(course_id: int, user_key: str = "") -> dict:
 
     Args:
         course_id (int): Moodle course id, from list_my_courses.
-        user_key (str): Opaque per-student key.
 
     Returns:
         dict: status, plus sections each holding files with name, size and link.
     """
+    user_key = _key(tool_context)
     try:
         sections = _call(
             "core_course_get_contents",
@@ -489,7 +600,163 @@ def list_course_notes(course_id: int, user_key: str = "") -> dict:
     return {"status": "success", "course_id": course_id, "sections": result}
 
 
-def list_manual_activities(course_id: int, user_key: str = "") -> dict:
+def whats_new_in_unit(course_id: int, tool_context: Any = None) -> dict:
+    """Summarises the most recent topics in a unit: objectives plus notes.
+
+    Use this for questions like "what is mobile programming about now" or
+    "what did we cover last week". It returns the lecturer's own objectives
+    text for the latest topics and download links for that week's material, so
+    the student can study offline.
+
+    Args:
+        course_id (int): Moodle course id, from list_my_courses.
+
+    Returns:
+        dict: status, plus the latest topics with objectives text and files.
+    """
+    user_key = _key(tool_context)
+    try:
+        sections = _call(
+            "core_course_get_contents",
+            {"courseid": course_id},
+            user_key=user_key or None,
+        )
+    except MoodleError as error:
+        return _fail(error)
+
+    topics = []
+    # Moodle returns sections in course order, so the newest teaching weeks are
+    # at the end. Skip section 0 (General) and any admin-only section.
+    for section in reversed(sections):
+        if len(topics) >= 3:
+            break
+        if not section.get("uservisible", True):
+            continue
+        notes, objectives = [], []
+        for module in section.get("modules", []) or []:
+            if not module.get("uservisible", True):
+                continue
+            if module.get("modname") == "label":
+                text = _plain(module.get("description", ""))
+                if text:
+                    objectives.append(text)
+                continue
+            for item in module.get("contents", []) or []:
+                if item.get("type") != "file" or not item.get("fileurl"):
+                    continue
+                media_id = register_file(
+                    item["fileurl"],
+                    item.get("filename", "file"),
+                    item.get("mimetype", ""),
+                    user_key=user_key,
+                )
+                notes.append(
+                    {
+                        "filename": item.get("filename"),
+                        "size_bytes": item.get("filesize"),
+                        "link": media_path(media_id),
+                    }
+                )
+        if objectives or notes:
+            topics.append(
+                {
+                    "topic": section.get("name"),
+                    "objectives": objectives,
+                    "files": notes,
+                }
+            )
+    return {"status": "success", "course_id": course_id, "latest_topics": topics}
+
+
+def get_assignment_brief(course_id: int, tool_context: Any = None) -> dict:
+    """Fetches the assignment questions and submission rules for one unit.
+
+    This is the read side of coursework: the questions, the deadline, what file
+    types the lecturer accepts, the size cap, and links to the brief documents.
+    The student does the work and submits it themselves - this agent cannot
+    submit, and must never imply that it did.
+
+    Args:
+        course_id (int): Moodle course id, from list_my_courses.
+
+    Returns:
+        dict: status, plus assignments with questions, format rules and files.
+    """
+    user_key = _key(tool_context)
+    try:
+        payload = _call(
+            "mod_assign_get_assignments",
+            {"courseids": [course_id]},
+            user_key=user_key or None,
+        )
+    except MoodleError as error:
+        return _fail(error)
+
+    items = []
+    for course in payload.get("courses", []) or []:
+        for assignment in course.get("assignments", []) or []:
+            cfg = {
+                (c.get("plugin"), c.get("name")): c.get("value")
+                for c in assignment.get("configs") or []
+            }
+            max_bytes = cfg.get(("file", "maxsubmissionsizebytes"))
+            files = []
+            for group in ("introattachments", "activityattachments"):
+                for item in assignment.get(group) or []:
+                    if not item.get("fileurl"):
+                        continue
+                    media_id = register_file(
+                        item["fileurl"],
+                        item.get("filename", "file"),
+                        item.get("mimetype", ""),
+                        user_key=user_key,
+                    )
+                    files.append(
+                        {
+                            "filename": item.get("filename"),
+                            "size_bytes": item.get("filesize"),
+                            "link": media_path(media_id),
+                        }
+                    )
+
+            questions = " ".join(
+                part
+                for part in (
+                    _plain(assignment.get("intro", ""), 500),
+                    _plain(assignment.get("activity", ""), 1800),
+                )
+                if part
+            ).strip()
+
+            items.append(
+                {
+                    "name": assignment.get("name"),
+                    "cmid": assignment.get("cmid"),
+                    "due_iso": _iso(assignment.get("duedate")),
+                    "cutoff_iso": _iso(assignment.get("cutoffdate")),
+                    "submission_required": not bool(assignment.get("nosubmissions")),
+                    "accepted_file_types": cfg.get(("file", "filetypeslist")) or "",
+                    "accepts_typed_text": cfg.get(("onlinetext", "enabled")) == "1",
+                    "max_upload_mb": round(int(max_bytes) / 1048576, 1) if max_bytes else None,
+                    "questions": questions,
+                    "brief_files": files,
+                }
+            )
+
+    # Live work first: nearest real deadline, then undated, then the past.
+    now = int(time.time())
+
+    def _order(item: dict) -> tuple:
+        due = item.get("due_iso")
+        if not due:
+            return (1, "")
+        return (0 if _epoch_safe(due) >= now else 2, due)
+
+    items.sort(key=_order)
+    return {"status": "success", "course_id": course_id, "assignments": items}
+
+
+def list_manual_activities(course_id: int, tool_context: Any = None) -> dict:
     """Lists activities in a unit whose completion the student can tick manually.
 
     Only activities reported with manual tracking can be changed by
@@ -499,11 +766,11 @@ def list_manual_activities(course_id: int, user_key: str = "") -> dict:
 
     Args:
         course_id (int): Moodle course id.
-        user_key (str): Opaque per-student key.
 
     Returns:
         dict: status, plus manual activities with cmid, type and done flag.
     """
+    user_key = _key(tool_context)
     try:
         payload = _call(
             "core_completion_get_activities_completion_status",
@@ -533,7 +800,12 @@ def list_manual_activities(course_id: int, user_key: str = "") -> dict:
     }
 
 
-def mark_activity_done(cmid: int, done: bool = True, user_key: str = "") -> dict:
+# ---------------------------------------------------------------------------
+# Write tools (guardrail-gated)
+# ---------------------------------------------------------------------------
+
+
+def mark_activity_done(cmid: int, done: bool = True, tool_context: Any = None) -> dict:
     """Ticks or unticks a manually-completed Moodle activity. Reversible.
 
     This only affects the student's own completion tick. It does not submit
@@ -543,11 +815,11 @@ def mark_activity_done(cmid: int, done: bool = True, user_key: str = "") -> dict
     Args:
         cmid (int): Course-module id, from list_manual_activities.
         done (bool): True to tick, False to untick.
-        user_key (str): Opaque per-student key.
 
     Returns:
         dict: status and a short confirmation.
     """
+    user_key = _key(tool_context)
     try:
         result = _call(
             "core_completion_update_activity_completion_status_manually",
@@ -577,7 +849,7 @@ def create_reminder(
     title: str,
     when_iso: str,
     note: str = "",
-    user_key: str = "",
+    tool_context: Any = None,
 ) -> dict:
     """Creates a private reminder in this student's own Moodle calendar.
 
@@ -588,11 +860,11 @@ def create_reminder(
         title (str): Short reminder title.
         when_iso (str): When to remind, ISO-8601, for example 2026-08-30T09:00.
         note (str): Optional longer description.
-        user_key (str): Opaque per-student key.
 
     Returns:
         dict: status and the created event id.
     """
+    user_key = _key(tool_context)
     try:
         timestamp = _epoch(when_iso)
     except ValueError:
@@ -640,6 +912,29 @@ def create_reminder(
 # Helpers
 # ---------------------------------------------------------------------------
 
+_TAG_RE = re.compile(r"<[^>]+>")
+_WS_RE = re.compile(r"\s+")
+_ENTITIES = (
+    ("&nbsp;", " "),
+    ("\u00a0", " "),
+    ("&amp;", "&"),
+    ("&lt;", "<"),
+    ("&gt;", ">"),
+    ("&quot;", '"'),
+    ("&#39;", "'"),
+)
+
+
+def _plain(html: str, limit: int = 700) -> str:
+    """Turns Moodle's stored HTML into text safe to send over WhatsApp."""
+    text = _TAG_RE.sub(" ", html or "")
+    for needle, replacement in _ENTITIES:
+        text = text.replace(needle, replacement)
+    text = _WS_RE.sub(" ", text).strip()
+    if len(text) > limit:
+        return text[: limit - 1].rstrip() + "\u2026"
+    return text
+
 
 def _iso(timestamp: Any) -> str | None:
     if not timestamp:
@@ -655,11 +950,22 @@ def _epoch(value: str) -> int:
     return int(parsed.timestamp())
 
 
+def _epoch_safe(value: str) -> int:
+    try:
+        return _epoch(value)
+    except ValueError:
+        return 0
+
+
 # Wire these into the agent with:  tools=[..., *MOODLE_TOOLS]
 MOODLE_TOOLS = [
+    link_my_moodle,
+    unlink_my_moodle,
     list_my_courses,
     whats_due_soon,
+    whats_new_in_unit,
     list_course_notes,
+    get_assignment_brief,
     list_manual_activities,
     mark_activity_done,
     create_reminder,
