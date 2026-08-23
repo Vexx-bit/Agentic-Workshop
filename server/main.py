@@ -10,6 +10,11 @@ Three routes matter:
     GET|POST /link/{id}   single-use page where a student links their own Moodle
     GET  /media/{id}      short-lived proxy for Moodle files
 
+Health: GET /, /healthz and /healthz/ all return the same JSON. That
+redundancy is deliberate - a bare base URL returning 404 reads exactly like a
+dead deployment, and a trailing slash used to produce a 307 that curl silently
+does not follow.
+
 Run locally:
     uvicorn server.main:app --reload --port 8000
     ngrok http 8000
@@ -20,6 +25,7 @@ Then point the Twilio WhatsApp sandbox "WHEN A MESSAGE COMES IN" webhook at:
 from __future__ import annotations
 
 import logging
+import os
 
 from fastapi import BackgroundTasks, FastAPI, Form, Request, Response
 
@@ -129,9 +135,35 @@ async def _handle(sender: str, body: str) -> None:
         logger.exception("failed to send whatsapp reply to %s", sender)
 
 
+def _health() -> dict:
+    """Everything needed to tell a live deploy from a stale one, in one GET.
+
+    link_store is the load-bearing field: it proves the token store actually
+    initialised, which is what decides whether students stay linked.
+    """
+    return {
+        "status": "ok",
+        "service": "whatsapp-study-agent",
+        "link_store": store.backend_name(),
+        "revision": os.getenv("K_REVISION", "local"),
+        "linking_configured": bool((PUBLIC_BASE_URL or "").strip()),
+    }
+
+
+# Three spellings, one handler. A bare base URL must never look dead.
+@app.get("/")
+async def root() -> dict:
+    return _health()
+
+
 @app.get("/healthz")
 async def healthz() -> dict:
-    return {"status": "ok", "link_store": store.backend_name()}
+    return _health()
+
+
+@app.get("/healthz/")
+async def healthz_slash() -> dict:
+    return _health()
 
 
 @app.post("/whatsapp")
