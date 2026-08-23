@@ -16,3 +16,9 @@ httpx>=0.27.0
 # Shared store for multi-user linking. Only imported when TOKEN_STORE=firestore,
 # but pinned here so switching backends is an env-var change, not a rebuild.
 google-cloud-firestore>=2.16.0,<3.0.0
+
+# Reading the lecturer's own material so the agent explains the real slides
+# rather than improvising. Imported lazily in browser_agent/study.py.
+python-pptx>=0.6.23
+python-docx>=1.1.0
+pypdf>=4.2.0
