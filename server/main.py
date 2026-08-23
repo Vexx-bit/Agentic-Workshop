@@ -30,6 +30,9 @@ logger = logging.getLogger("whatsapp-browser-agent")
 
 app = FastAPI(title="WhatsApp Browser Agent")
 
+from server.media import router as media_router
+app.include_router(media_router)
+
 EMPTY_TWIML = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
 
 HELP_TEXT = (
