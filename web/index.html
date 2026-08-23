@@ -1,0 +1,178 @@
+<!doctype html>
+<!--
+  Static onboarding + technical page. No build step, no framework, no API keys.
+
+  Deploy: Vercel > New Project > this repo > Root Directory = web
+  Then edit the CONFIG object below once and redeploy.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Study Agent on WhatsApp</title>
+<meta name="description" content="Ask your university e-learning account anything on WhatsApp: topics, notes, assignment questions and deadlines.">
+<style>
+:root{--ink:#0f172a;--mute:#5b6577;--line:#e4e7ec;--brand:#128c7e;--bg:#f7f8fa}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--ink);background:var(--bg);line-height:1.6}
+.wrap{max-width:860px;margin:0 auto;padding:0 20px}
+header{background:#fff;border-bottom:1px solid var(--line)}
+.nav{display:flex;justify-content:space-between;align-items:center;padding:16px 0;font-weight:700}
+.nav a{color:var(--mute);text-decoration:none;font-weight:500;margin-left:18px;font-size:14px}
+.hero{padding:56px 0 40px}
+h1{font-size:34px;line-height:1.2;margin:0 0 12px}
+.lede{font-size:18px;color:var(--mute);margin:0 0 26px}
+.cta{display:inline-block;background:var(--brand);color:#fff;text-decoration:none;font-weight:600;padding:13px 22px;border-radius:10px}
+.ghost{display:inline-block;margin-left:10px;padding:13px 18px;border:1px solid var(--line);border-radius:10px;background:#fff;color:var(--ink);text-decoration:none;font-weight:600}
+.chip{display:inline-block;font-size:12px;color:var(--mute);border:1px solid var(--line);background:#fff;border-radius:999px;padding:4px 11px;margin:0 6px 6px 0}
+section{padding:34px 0;border-top:1px solid var(--line)}
+h2{font-size:22px;margin:0 0 6px}
+h3{font-size:15px;margin:20px 0 4px}
+.sub{color:var(--mute);margin:0 0 18px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px}
+.card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px}
+.card b{display:block;margin-bottom:4px}
+.card span{color:var(--mute);font-size:14px}
+ol{padding-left:20px}li{margin-bottom:10px}
+code{background:#eef1f5;border-radius:5px;padding:2px 6px;font-size:13px}
+.say{background:#fff;border:1px solid var(--line);border-left:3px solid var(--brand);border-radius:8px;padding:9px 13px;margin:7px 0;font-size:15px}
+.no{background:#fff;border:1px solid var(--line);border-left:3px solid #d64545;border-radius:8px;padding:9px 13px;margin:7px 0;font-size:15px}
+table{width:100%;border-collapse:collapse;background:#fff;font-size:14px;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+th,td{text-align:left;padding:10px 13px;border-bottom:1px solid var(--line)}
+th{background:#fbfcfd;font-size:13px}
+footer{padding:28px 0;color:var(--mute);font-size:13px}
+</style>
+</head>
+<body>
+
+<header><div class="wrap nav"><span>Study Agent</span><nav>
+<a href="#start">Get started</a><a href="#can">What it does</a><a href="#safety">Safety</a><a href="#tech">How it works</a>
+</nav></div></header>
+
+<div class="wrap">
+
+<div class="hero">
+  <h1>Your e-learning account, on WhatsApp.</h1>
+  <p class="lede">Ask what a topic is about, get the assignment questions, pull down
+  this week's slides, check what you still have left. No app to install, no VPN,
+  no laptop. It answers from your lecturer's own files.</p>
+  <a class="cta" data-wa href="#start">Open in WhatsApp</a>
+  <a class="ghost" href="#start">Read the 4 steps</a>
+  <p style="margin-top:22px">
+    <span class="chip">WhatsApp &mdash; live</span>
+    <span class="chip">Telegram &mdash; planned</span>
+    <span class="chip">Built on Google ADK + Gemini</span>
+  </p>
+</div>
+
+<section id="start">
+  <h2>Get started</h2>
+  <p class="sub">About a minute. You will not type your password into a chat at any point.</p>
+  <ol>
+    <li><b>Save the number.</b> <code data-wa-number>loading</code> &mdash; or just tap
+      <a data-wa href="#start">Open in WhatsApp</a>.</li>
+    <li><b>Join the sandbox.</b> Send the exact phrase <code data-join>loading</code>.
+      This is a Twilio test number, so every new device sends this once.</li>
+    <li><b>Link your account.</b> Send <code>link</code>. You get a private page that
+      works once and expires in ten minutes. You sign in there, on HTTPS.</li>
+    <li><b>Ask it something.</b> Try <code>what are my units</code>.</li>
+  </ol>
+</section>
+
+<section id="can">
+  <h2>What it does</h2>
+  <p class="sub">Send any of these in plain English.</p>
+  <div class="grid">
+    <div class="card"><b>Explain a topic</b><span>Reads the actual slides your lecturer uploaded and explains them, naming the file.</span></div>
+    <div class="card"><b>Assignment questions</b><span>The questions, the deadline, the accepted file types and the size cap.</span></div>
+    <div class="card"><b>Send me the notes</b><span>Download links for a unit's slides and documents, straight into the chat.</span></div>
+    <div class="card"><b>What's due</b><span>Upcoming deadlines across every unit you are enrolled in.</span></div>
+    <div class="card"><b>How am I doing</b><span>Completion progress per unit, and what is still outstanding.</span></div>
+    <div class="card"><b>Remind me</b><span>Writes a private reminder into your own e-learning calendar.</span></div>
+  </div>
+  <h3>Things to try</h3>
+  <div class="say">what is mobile programming about now</div>
+  <div class="say">send me the assignment questions for mobile programming</div>
+  <div class="say">explain recyclerview from our slides</div>
+  <div class="say">what have I not finished in software testing</div>
+  <div class="say">remind me on Friday 6pm to finish the lab</div>
+</section>
+
+<section id="safety">
+  <h2>What it will never do</h2>
+  <p class="sub">These are refused in code, not just discouraged by a prompt.</p>
+  <div class="no">Submit your coursework, or upload a file on your behalf</div>
+  <div class="no">Open, answer or submit a quiz</div>
+  <div class="no">Read or write any grade</div>
+  <div class="no">Post to a forum in your name</div>
+  <p style="color:var(--mute);font-size:14px">It fetches the questions and the material.
+  You do the work and you submit it. That line is deliberate: an agent that could
+  hand in your assignment is a cheating tool, not a study tool.</p>
+
+  <h3>Your credentials</h3>
+  <table>
+    <tr><th>Question</th><th>Answer</th></tr>
+    <tr><td>Where do I type my password?</td><td>On a one-time HTTPS page, never in the chat.</td></tr>
+    <tr><td>Is it stored?</td><td>No. It is swapped for an access token in a single request, then discarded. Never logged.</td></tr>
+    <tr><td>What is kept?</td><td>The access token, filed under a salted hash of your phone number.</td></tr>
+    <tr><td>Can it see other students?</td><td>No. Your token carries only your own permissions.</td></tr>
+    <tr><td>How do I revoke it?</td><td>Send <code>unlink</code>. The token is deleted immediately.</td></tr>
+  </table>
+</section>
+
+<section id="tech">
+  <h2>How it works</h2>
+  <p class="sub">For the judges, and for anyone who wants to fork it.</p>
+  <p><code>WhatsApp &rarr; Twilio webhook &rarr; FastAPI on Cloud Run &rarr; Google ADK agent &rarr; e-learning web-service API</code></p>
+
+  <h3>Two paths, chosen explicitly</h3>
+  <p>The agent has a browser (Playwright MCP, DOM-first with a Gemini vision fallback
+  for anything the accessibility tree cannot expose) and it has a REST toolset. The
+  e-learning site is <b>always</b> reached over REST, never the browser: the site
+  allows one interactive session per user, so a headless login there could log a
+  student out of their own laptop mid-class. Token calls do not consume that session,
+  which is also why many students can use the bot at the same time.</p>
+
+  <h3>Many students, one deployment</h3>
+  <p>Each student holds their own token. Sessions and store keys are salted hashes of
+  the phone number, so the datastore is not a list of student numbers. Turns are
+  serialised per sender and run concurrently across senders, with a cap on total
+  in-flight work.</p>
+
+  <h3>Guardrails</h3>
+  <p>A server-side allowlist decides which API functions can be called at all, and a
+  second independent denylist permanently blocks submission, quiz and grade
+  functions. Anything state-changing stops and asks for a plain-language YES first.
+  Course content is treated as untrusted data, so a prompt hidden in a slide deck
+  cannot redirect the agent.</p>
+
+  <h3>Stack</h3>
+  <p><span class="chip">Google ADK</span><span class="chip">Gemini</span><span class="chip">FastAPI</span><span class="chip">Cloud Run</span><span class="chip">Playwright MCP</span><span class="chip">Twilio WhatsApp</span><span class="chip">Secret Manager</span></p>
+</section>
+
+<footer>Built for the Agentic AI Workshop hackathon. Not affiliated with any university.
+<span data-repo-note></span></footer>
+
+</div>
+
+<script>
+// The only thing to edit. No secrets belong on this page.
+const CONFIG = {
+  waNumber: "14155238886",              // Twilio WhatsApp sandbox number
+  joinCode: "join example-code",         // your sandbox join phrase
+  telegram: ""                           // reserved for Phase 2
+};
+
+const waLink = "https:" + "//wa.me/" + CONFIG.waNumber
+  + "?text=" + encodeURIComponent(CONFIG.joinCode);
+
+document.querySelectorAll("[data-wa]").forEach(function (el) { el.href = waLink; });
+document.querySelectorAll("[data-wa-number]").forEach(function (el) {
+  el.textContent = "+" + CONFIG.waNumber;
+});
+document.querySelectorAll("[data-join]").forEach(function (el) {
+  el.textContent = CONFIG.joinCode;
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+.git/
+.gitignore
+.venv/
+**/__pycache__/
+*.pyc
+.env
+**/.env
+artifacts/
+*.png
+*.jpeg
+*.jpg
+docs/
+my_agent/
+multi_tool_agent/

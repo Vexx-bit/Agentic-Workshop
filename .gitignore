@@ -5,3 +5,8 @@
 __pycache__/
 **/__pycache__/
 *.pyc
+artifacts/
+*.png
+*.jpeg
+*.webp
+storage-state*.json
