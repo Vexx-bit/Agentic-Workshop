@@ -29,8 +29,7 @@ BROWSER_ALLOWED_ORIGINS = os.getenv("BROWSER_ALLOWED_ORIGINS", "").strip()
 
 # --- Playwright MCP transport ---
 # Empty  -> run the MCP server locally as a stdio subprocess (npx).
-# Set    -> talk to a remote Playwright MCP service over streamable HTTP,
-#           e.g. https://playwright-mcp-xxxx.europe-west1.run.app/mcp
+# Set    -> talk to a remote Playwright MCP service over streamable HTTP.
 PLAYWRIGHT_MCP_URL = os.getenv("PLAYWRIGHT_MCP_URL", "").strip()
 # Audience for the Cloud Run ID token. Defaults to the service root derived
 # from PLAYWRIGHT_MCP_URL, which is what Cloud Run expects.
@@ -45,6 +44,15 @@ PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
 
 # WhatsApp hard limit per message body.
 WHATSAPP_MAX_CHARS = 1500
+
+# --- Moodle (LMS) ---
+# Base site URL, no trailing slash, e.g. the university e-learning host.
+MOODLE_BASE_URL = os.getenv("MOODLE_BASE_URL", "").strip().rstrip("/")
+# Single-user fallback token, for the demo. Per-student tokens supersede it at
+# runtime via browser_agent.moodle.set_token_for().
+MOODLE_TOKEN = os.getenv("MOODLE_TOKEN", "").strip()
+# How long a proxied file link stays alive, in seconds.
+MOODLE_MEDIA_TTL_SECONDS = int(os.getenv("MOODLE_MEDIA_TTL_SECONDS", "900"))
 
 # --- Demo target ---
 DEMO_SITE_URL = os.getenv("DEMO_SITE_URL", "https://www.saucedemo.com")
