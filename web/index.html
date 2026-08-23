@@ -62,7 +62,8 @@ footer{padding:28px 0;color:var(--mute);font-size:13px}
   <b>Not configured yet &mdash; visible to you and to visitors.</b>
   Open <code>web/index.html</code>, scroll to the <code>CONFIG</code> object at the bottom,
   and set <code>joinCode</code> to the phrase shown in the Twilio Console under
-  <i>Messaging &rsaquo; Try it out &rsaquo; Send a WhatsApp message</i>. Then redeploy.
+  <i>Messaging &rsaquo; Try it out &rsaquo; Send a WhatsApp message &rsaquo; Sandbox</i>.
+  Then redeploy.
 </div>
 
 <div class="hero">
@@ -86,17 +87,18 @@ footer{padding:28px 0;color:var(--mute);font-size:13px}
     <li><b>Save the number.</b> <code data-wa-number>loading</code> &mdash; or just tap
       <a data-wa href="#start">Open in WhatsApp</a>.</li>
     <li><b>Join the test environment.</b> Send <span data-join-wrap><code data-join>loading</code></span>.
-      This is a Twilio trial number, so every new device sends this phrase once.
-      It must match exactly &mdash; any other wording is refused.</li>
+      This runs on the Twilio WhatsApp sandbox, so every new device sends this phrase
+      once. It must match exactly &mdash; any other wording is refused.</li>
     <li><b>Link your account.</b> Send <code>link</code>. You get a private page that
       works once and expires in ten minutes. You sign in there, on HTTPS.</li>
     <li><b>Ask it something.</b> Try <code>what are my units</code>.</li>
   </ol>
-  <p class="note"><b>While this runs on a Twilio trial number,</b> only one phone can be
-  connected to the test environment at a time, and each device reconnects per session.
-  That is a limit of the trial messaging account, not of the agent: tokens, sessions and
-  storage keys are per student, and moving to a paid number lifts the cap without a code
-  change.</p>
+  <p class="note"><b>Because this runs on the Twilio sandbox rather than an approved
+  business number,</b> each device joins with the phrase above, and re-sends it after a
+  long gap without messages. The agent can reply freely for 24 hours after you message
+  it, which is why it never messages you first. Those are messaging-platform rules, not
+  limits of the agent: tokens, sessions and storage keys are per student, so several
+  students can be joined and served at once.</p>
 </section>
 
 <section id="can">
@@ -159,12 +161,20 @@ footer{padding:28px 0;color:var(--mute);font-size:13px}
   serialised per sender and run concurrently across senders, with a cap on total
   in-flight work.</p>
 
+  <h3>The messaging layer is an adapter</h3>
+  <p>Nothing above the webhook knows which chat app a student is using. The sender key
+  carries the channel, and one dispatch function picks the transport, so a second
+  interface is a file rather than a rewrite. That mattered in practice: the newer Twilio
+  trial sender only accepts pre-approved message templates, which cannot carry an
+  agent's free-form answers, so the build targets the sandbox sender that can.</p>
+
   <h3>Guardrails</h3>
   <p>A server-side allowlist decides which API functions can be called at all, and a
   second independent denylist permanently blocks submission, quiz and grade
   functions. Anything state-changing stops and asks for a plain-language YES first.
   Course content is treated as untrusted data, so a prompt hidden in a slide deck
-  cannot redirect the agent.</p>
+  cannot redirect the agent. Inbound webhooks are rejected unless they carry a valid
+  Twilio signature.</p>
 
   <h3>Stack</h3>
   <p><span class="chip">Google ADK</span><span class="chip">Gemini</span><span class="chip">FastAPI</span><span class="chip">Cloud Run</span><span class="chip">Playwright MCP</span><span class="chip">Twilio WhatsApp</span><span class="chip">Secret Manager</span></p>
@@ -177,16 +187,24 @@ footer{padding:28px 0;color:var(--mute);font-size:13px}
 <script>
 // The only thing to edit. No secrets belong on this page.
 //
-// waNumber: the WhatsApp number messages are sent to, digits only. On the new
-//   Twilio trial this is the trial number shown next to the QR code, which is
-//   NOT the classic sandbox number 14155238886. Read it from the console.
-// joinCode: the exact phrase shown beside it. On the trial flow this is
-//   "join twilio-trial"; classic sandboxes use a unique "join two-words".
-//   Leave it empty rather than guessing: a wrong phrase is refused by Twilio.
+// This Twilio account exposes TWO WhatsApp surfaces, and they are not
+// interchangeable:
+//
+//   1. "Try out WhatsApp" trial panel - sender 17372508034, shared phrase
+//      "join twilio-trial". Outbound is template-only: a free-form body is
+//      rejected with 21654 ContentSid Required, so an agent cannot reply
+//      through it. There is no webhook field. Do not use it.
+//   2. Classic Sandbox - sender 14155238886, a unique per-account phrase, and
+//      a "When a message comes in" webhook field. Free-form replies allowed
+//      for 24h after the student messages in. This is the one we use.
+//
+// waNumber: digits only, no plus sign.
+// joinCode: the exact phrase from the Sandbox tab. Leave empty rather than
+//   guessing - a wrong phrase is refused, and the page shows a setup banner.
 const CONFIG = {
-  waNumber: "17372508034",       // Twilio trial WhatsApp number, digits only
-  joinCode: "join twilio-trial", // exact phrase from the console
-  telegram: ""                   // reserved for Phase 2
+  waNumber: "14155238886",       // Twilio WhatsApp sandbox number, digits only
+  joinCode: "join strong-swung", // exact phrase from the Sandbox tab
+  telegram: ""                   // reserved for a second interface
 };
 
 const joinCode = (CONFIG.joinCode || "").trim();
