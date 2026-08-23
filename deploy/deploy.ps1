@@ -111,16 +111,17 @@ gcloud run services update $AGENT_SERVICE --region $REGION --update-env-vars "PU
 # Observe the health endpoint rather than assuming it. link_store proves the
 # token store actually initialised; "the route exists" does not.
 Write-Host ""
-Write-Host "==> Verifying /healthz"
+Write-Host "==> Verifying root endpoint (proof of life)"
 try {
-    $health = Invoke-RestMethod -Uri "$AGENT_URL/healthz" -TimeoutSec 45
+    $health = Invoke-RestMethod -Uri "$AGENT_URL/" -TimeoutSec 45
     Write-Host "    status     : $($health.status)"
     Write-Host "    link_store : $($health.link_store)"
+    Write-Host "    revision   : $($health.revision)"
     if ($health.link_store -ne "memory" -and $health.link_store -ne "firestore") {
         Write-Host "    WARNING: unexpected link_store value. Students may not stay linked."
     }
 } catch {
-    Write-Host "    FAILED to reach $AGENT_URL/healthz"
+    Write-Host "    FAILED to reach $AGENT_URL/"
     Write-Host "    $($_.Exception.Message)"
     Write-Host "    Do not demo until this returns JSON."
 }
