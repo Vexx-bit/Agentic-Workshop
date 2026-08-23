@@ -36,6 +36,11 @@ PLAYWRIGHT_MCP_URL = os.getenv("PLAYWRIGHT_MCP_URL", "").strip()
 PLAYWRIGHT_MCP_TOKEN_AUDIENCE = os.getenv("PLAYWRIGHT_MCP_TOKEN_AUDIENCE", "").strip()
 
 # --- Twilio ---
+# NOTE: a Twilio *trial* account cannot send free-form WhatsApp bodies over the
+# REST API - it returns HTTP 400 "trial accounts have limited parameter access"
+# and only accepts pre-approved templates (ContentSid). Agent replies are
+# arbitrary prose, so WhatsApp needs an upgraded account. Telegram below is the
+# no-cost alternative interface.
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
 TWILIO_WHATSAPP_FROM = os.getenv("TWILIO_WHATSAPP_FROM", "whatsapp:+14155238886")
@@ -44,6 +49,15 @@ PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
 
 # WhatsApp hard limit per message body.
 WHATSAPP_MAX_CHARS = 1500
+
+# --- Telegram ---
+# Free, no message templates, no 24h session window, no per-message cost.
+# Token comes from @BotFather. The webhook secret is echoed back by Telegram in
+# the X-Telegram-Bot-Api-Secret-Token header, which is how we authenticate
+# inbound calls (the Telegram equivalent of Twilio's request signature).
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
+TELEGRAM_MAX_CHARS = 4000
 
 # --- Moodle (LMS) ---
 # Base site URL, no trailing slash, e.g. the university e-learning host.

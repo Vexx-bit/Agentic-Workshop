@@ -1,14 +1,23 @@
-"""FastAPI ingress for the WhatsApp-operated study agent (Twilio).
+"""FastAPI ingress for the study agent (Twilio WhatsApp + Telegram).
 
-Key constraint: Twilio's webhook expects a response within ~10-15s, and both
+Key constraint: a messaging webhook expects a response within seconds, and both
 browser automation and multi-step LMS work are slower than that. So we ACK
-immediately with empty TwiML and do the real work in a background task,
-replying via the Twilio REST API.
+immediately and do the real work in a background task, replying over the API.
 
-Three routes matter:
-    POST /whatsapp        Twilio webhook
+Two interfaces, one agent:
+    POST /whatsapp        Twilio webhook (needs a non-trial Twilio account:
+                          trial accounts reject free-form bodies with HTTP 400
+                          "trial accounts have limited parameter access")
+    POST /telegram        Telegram webhook (free, no templates, no 24h window)
+
+Shared routes:
     GET|POST /link/{id}   single-use page where a student links their own Moodle
     GET  /media/{id}      short-lived proxy for Moodle files
+
+The channel is carried in the sender key: "whatsapp:+254..." or
+"telegram:<chat_id>". Every downstream layer (store keys, ADK sessions,
+per-sender locks) is keyed off that string, so the two channels stay isolated
+from each other and per student.
 
 Health: GET /, /healthz and /healthz/ all return the same JSON. That
 redundancy is deliberate - a bare base URL returning 404 reads exactly like a
@@ -18,8 +27,6 @@ does not follow.
 Run locally:
     uvicorn server.main:app --reload --port 8000
     ngrok http 8000
-Then point the Twilio WhatsApp sandbox "WHEN A MESSAGE COMES IN" webhook at:
-    https://<your-ngrok-domain>/whatsapp    (HTTP POST)
 """
 
 from __future__ import annotations
@@ -35,7 +42,7 @@ from browser_agent.config import (
     TWILIO_AUTH_TOKEN,
     TWILIO_VALIDATE_SIGNATURE,
 )
-from server import whatsapp
+from server import telegram, whatsapp
 from server.link import router as link_router
 from server.media import router as media_router
 from server.runner import run_turn
@@ -43,11 +50,13 @@ from server.runner import run_turn
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("whatsapp-browser-agent")
 
-app = FastAPI(title="WhatsApp Study Agent")
+app = FastAPI(title="Study Agent (WhatsApp + Telegram)")
 app.include_router(media_router)
 app.include_router(link_router)
 
 EMPTY_TWIML = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
+
+TELEGRAM_PREFIX = "telegram:"
 
 HELP_TEXT = (
     "Study assistant ready.\n\n"
@@ -67,6 +76,18 @@ HELP_TEXT = (
 
 LINK_WORDS = {"link", "link me", "connect", "login", "log in", "sign in"}
 UNLINK_WORDS = {"unlink", "forget me", "logout", "log out", "disconnect", "delete my data"}
+GREETINGS = {"hi", "hello", "help", "start", "/start", "menu"}
+
+
+def _reply(sender: str, text: str) -> None:
+    """Sends text back over whichever channel the sender came from.
+
+    One dispatch point, so no caller has to know about transports.
+    """
+    if sender.startswith(TELEGRAM_PREFIX):
+        telegram.send(sender[len(TELEGRAM_PREFIX):], text)
+    else:
+        whatsapp.send(sender, text)
 
 
 def _validate_signature(request: Request, form: dict) -> bool:
@@ -92,11 +113,11 @@ def _send_link(sender: str) -> None:
     """
     base = (PUBLIC_BASE_URL or "").rstrip("/")
     if not base:
-        whatsapp.send(sender, "Linking isn't configured on this deployment yet.")
+        _reply(sender, "Linking isn't configured on this deployment yet.")
         return
     nonce = store.new_link_nonce(store.user_key_for(sender))
     minutes = max(1, store.LINK_TTL_SECONDS // 60)
-    whatsapp.send(
+    _reply(
         sender,
         "Open this to sign in to your e-learning account:\n"
         f"{base}/link/{nonce}\n\n"
@@ -108,7 +129,7 @@ def _send_link(sender: str) -> None:
 
 def _do_unlink(sender: str) -> None:
     was_linked = moodle.forget_token(store.user_key_for(sender))
-    whatsapp.send(
+    _reply(
         sender,
         "Done - your stored e-learning access has been deleted. Send 'link' if "
         "you want to connect again."
@@ -118,7 +139,7 @@ def _do_unlink(sender: str) -> None:
 
 
 async def _handle(sender: str, body: str) -> None:
-    """Background worker: run the agent, then reply over WhatsApp."""
+    """Background worker: run the agent, then reply on the sender's channel."""
     try:
         reply = await run_turn(sender, body)
     except Exception as exc:  # never leave the user hanging
@@ -130,9 +151,46 @@ async def _handle(sender: str, body: str) -> None:
         )
 
     try:
-        whatsapp.send(sender, reply)
+        _reply(sender, reply)
     except Exception:
-        logger.exception("failed to send whatsapp reply to %s", sender)
+        logger.exception("failed to send reply to %s", sender)
+
+
+def _dispatch(sender: str, body: str, background: BackgroundTasks) -> None:
+    """Channel-agnostic command routing. Queues work; never blocks."""
+    lowered = body.lower()
+
+    if lowered in GREETINGS:
+        background.add_task(_reply, sender, HELP_TEXT)
+        return
+
+    if lowered in LINK_WORDS:
+        background.add_task(_send_link, sender)
+        return
+
+    if lowered in UNLINK_WORDS:
+        background.add_task(_do_unlink, sender)
+        return
+
+    # Never accept credentials over chat, even if offered unprompted.
+    if "password" in lowered and (":" in body or "=" in body):
+        background.add_task(
+            _reply,
+            sender,
+            "Don't send passwords here - this chat is stored. Send 'link' and "
+            "type it once on the secure page instead.",
+        )
+        return
+
+    if not body:
+        background.add_task(
+            _reply, sender, "Send me a text instruction (media isn't supported yet)."
+        )
+        return
+
+    # Fast ack + async work: this is the non-negotiable timeout rule.
+    background.add_task(_reply, sender, "On it\u2026")
+    background.add_task(_handle, sender, body)
 
 
 def _health() -> dict:
@@ -147,6 +205,7 @@ def _health() -> dict:
         "link_store": store.backend_name(),
         "revision": os.getenv("K_REVISION", "local"),
         "linking_configured": bool((PUBLIC_BASE_URL or "").strip()),
+        "telegram_configured": telegram.configured(),
     }
 
 
@@ -181,42 +240,37 @@ async def whatsapp_webhook(
 
     sender = From or form.get("From", "")
     body = (Body or form.get("Body", "")).strip()
-    logger.info("inbound from %s: %s", sender, body[:200])
+    logger.info("inbound whatsapp from %s: %s", sender, body[:200])
 
-    if not sender:
-        return Response(content=EMPTY_TWIML, media_type="application/xml")
+    if sender:
+        _dispatch(sender, body, background)
 
-    lowered = body.lower()
-
-    if lowered in {"hi", "hello", "help", "start", "/start", "menu"}:
-        background.add_task(whatsapp.send, sender, HELP_TEXT)
-        return Response(content=EMPTY_TWIML, media_type="application/xml")
-
-    if lowered in LINK_WORDS:
-        background.add_task(_send_link, sender)
-        return Response(content=EMPTY_TWIML, media_type="application/xml")
-
-    if lowered in UNLINK_WORDS:
-        background.add_task(_do_unlink, sender)
-        return Response(content=EMPTY_TWIML, media_type="application/xml")
-
-    # Never accept credentials over chat, even if offered unprompted.
-    if "password" in lowered and (":" in body or "=" in body):
-        background.add_task(
-            whatsapp.send,
-            sender,
-            "Don't send passwords here - WhatsApp keeps this chat. Send 'link' "
-            "and type it once on the secure page instead.",
-        )
-        return Response(content=EMPTY_TWIML, media_type="application/xml")
-
-    if not body:
-        background.add_task(
-            whatsapp.send, sender, "Send me a text instruction (media isn't supported yet)."
-        )
-        return Response(content=EMPTY_TWIML, media_type="application/xml")
-
-    # Fast ack + async work: this is the non-negotiable timeout rule.
-    background.add_task(whatsapp.send, sender, "On it\u2026")
-    background.add_task(_handle, sender, body)
     return Response(content=EMPTY_TWIML, media_type="application/xml")
+
+
+@app.post("/telegram")
+async def telegram_webhook(request: Request, background: BackgroundTasks) -> dict:
+    """Telegram webhook.
+
+    Authenticated by the secret token Telegram echoes back in a header, which is
+    the Telegram counterpart to Twilio's request signature. Always returns 200
+    with a short body: a non-2xx makes Telegram retry the same update.
+    """
+    if not telegram.secret_ok(request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")):
+        logger.warning("rejected telegram update with bad secret token")
+        return {"ok": False}
+
+    try:
+        update = await request.json()
+    except Exception:
+        logger.warning("telegram update was not valid JSON")
+        return {"ok": True}
+
+    chat_id, text = telegram.extract(update)
+    if not chat_id:
+        return {"ok": True}
+
+    sender = f"{TELEGRAM_PREFIX}{chat_id}"
+    logger.info("inbound telegram from %s: %s", sender, text[:200])
+    _dispatch(sender, text, background)
+    return {"ok": True}
