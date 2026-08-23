@@ -45,7 +45,7 @@ Write-Host "==> 2/3 Building the agent image"
 gcloud builds submit --config cloudbuild.yaml --substitutions="_REGION=$REGION,_REPO=$REPO,_IMAGE=$AGENT_SERVICE"
 
 Write-Host "==> 3/3 Deploying the agent service"
-gcloud run deploy $AGENT_SERVICE --image $AGENT_IMAGE --region $REGION --allow-unauthenticated --cpu $AGENT_CPU --memory $AGENT_MEMORY --timeout 600 --max-instances $AGENT_MAX_INSTANCES --set-env-vars "PLAYWRIGHT_MCP_URL=$MCP_URL/mcp,BROWSER_ARTIFACT_DIR=/tmp/artifacts,TWILIO_VALIDATE_SIGNATURE=1,MOODLE_BASE_URL=https://elearning.zetech.ac.ke" --set-secrets "GOOGLE_API_KEY=GOOGLE_API_KEY:latest,TWILIO_ACCOUNT_SID=TWILIO_ACCOUNT_SID:latest,TWILIO_AUTH_TOKEN=TWILIO_AUTH_TOKEN:latest,MOODLE_TOKEN=MOODLE_TOKEN:latest"
+gcloud run deploy $AGENT_SERVICE --image $AGENT_IMAGE --region $REGION --allow-unauthenticated --cpu $AGENT_CPU --memory $AGENT_MEMORY --timeout 600 --min-instances 1 --max-instances 1 --set-env-vars "PLAYWRIGHT_MCP_URL=$MCP_URL/mcp,BROWSER_ARTIFACT_DIR=/tmp/artifacts,TWILIO_VALIDATE_SIGNATURE=1,MOODLE_BASE_URL=https://elearning.zetech.ac.ke,TOKEN_STORE=memory" --set-secrets "GOOGLE_API_KEY=GOOGLE_API_KEY:latest,TWILIO_ACCOUNT_SID=TWILIO_ACCOUNT_SID:latest,TWILIO_AUTH_TOKEN=TWILIO_AUTH_TOKEN:latest,MOODLE_TOKEN=MOODLE_TOKEN:latest,USER_KEY_PEPPER=USER_KEY_PEPPER:latest"
 
 $AGENT_URL = (gcloud run services describe $AGENT_SERVICE --region $REGION --format="value(status.url)")
 
