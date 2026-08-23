@@ -1,8 +1,14 @@
-"""FastAPI ingress for the WhatsApp-operated browser agent (Twilio).
+"""FastAPI ingress for the WhatsApp-operated study agent (Twilio).
 
-Key constraint: Twilio's webhook expects a response within ~10-15s, and browser
-automation is far slower than that. So we ACK immediately with empty TwiML and
-do the real work in a background task, replying via the Twilio REST API.
+Key constraint: Twilio's webhook expects a response within ~10-15s, and both
+browser automation and multi-step LMS work are slower than that. So we ACK
+immediately with empty TwiML and do the real work in a background task,
+replying via the Twilio REST API.
+
+Three routes matter:
+    POST /whatsapp        Twilio webhook
+    GET|POST /link/{id}   single-use page where a student links their own Moodle
+    GET  /media/{id}      short-lived proxy for Moodle files
 
 Run locally:
     uvicorn server.main:app --reload --port 8000
@@ -17,33 +23,44 @@ import logging
 
 from fastapi import BackgroundTasks, FastAPI, Form, Request, Response
 
+from browser_agent import moodle, store
 from browser_agent.config import (
     PUBLIC_BASE_URL,
     TWILIO_AUTH_TOKEN,
     TWILIO_VALIDATE_SIGNATURE,
 )
 from server import whatsapp
+from server.link import router as link_router
+from server.media import router as media_router
 from server.runner import run_turn
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("whatsapp-browser-agent")
 
-app = FastAPI(title="WhatsApp Browser Agent")
-
-from server.media import router as media_router
+app = FastAPI(title="WhatsApp Study Agent")
 app.include_router(media_router)
+app.include_router(link_router)
 
 EMPTY_TWIML = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
 
 HELP_TEXT = (
-    "Browser agent ready.\n\n"
-    "Try:\n"
-    "- open saucedemo and tell me the first 3 product prices\n"
-    "- log in as standard_user and list what's in the cart\n"
-    "- go to the-internet.herokuapp.com and find the login form\n\n"
-    "Anything that changes a site (submit, buy, delete) I will ask you to "
-    "confirm with YES first."
+    "Study assistant ready.\n\n"
+    "First, send: link\n"
+    "That gives you a private one-time page to sign in to your e-learning "
+    "account. Your password is never typed into this chat.\n\n"
+    "Then try:\n"
+    "- what are my units\n"
+    "- what is mobile programming about now\n"
+    "- send me the assignment questions for mobile programming\n"
+    "- what's due in the next 2 weeks\n"
+    "- remind me on Friday 6pm to finish the lab\n\n"
+    "I will not submit coursework, sit a quiz or touch a grade - that is "
+    "blocked in code. I fetch the questions and notes; you do the work.\n\n"
+    "Send unlink at any time to delete your stored access."
 )
+
+LINK_WORDS = {"link", "link me", "connect", "login", "log in", "sign in"}
+UNLINK_WORDS = {"unlink", "forget me", "logout", "log out", "disconnect", "delete my data"}
 
 
 def _validate_signature(request: Request, form: dict) -> bool:
@@ -61,6 +78,39 @@ def _validate_signature(request: Request, form: dict) -> bool:
     return RequestValidator(TWILIO_AUTH_TOKEN).validate(url, form, signature)
 
 
+def _send_link(sender: str) -> None:
+    """Mints and sends a link page. Deterministic: no model in the path.
+
+    Linking is the one step where a confused model would strand a student, so
+    the plain word 'link' is handled here rather than as a tool call.
+    """
+    base = (PUBLIC_BASE_URL or "").rstrip("/")
+    if not base:
+        whatsapp.send(sender, "Linking isn't configured on this deployment yet.")
+        return
+    nonce = store.new_link_nonce(store.user_key_for(sender))
+    minutes = max(1, store.LINK_TTL_SECONDS // 60)
+    whatsapp.send(
+        sender,
+        "Open this to sign in to your e-learning account:\n"
+        f"{base}/link/{nonce}\n\n"
+        f"It works once and expires in {minutes} minutes. Your password is "
+        "exchanged for an access token and is never saved, logged, or typed "
+        "into this chat.",
+    )
+
+
+def _do_unlink(sender: str) -> None:
+    was_linked = moodle.forget_token(store.user_key_for(sender))
+    whatsapp.send(
+        sender,
+        "Done - your stored e-learning access has been deleted. Send 'link' if "
+        "you want to connect again."
+        if was_linked
+        else "You weren't linked, so there was nothing to delete.",
+    )
+
+
 async def _handle(sender: str, body: str) -> None:
     """Background worker: run the agent, then reply over WhatsApp."""
     try:
@@ -68,9 +118,9 @@ async def _handle(sender: str, body: str) -> None:
     except Exception as exc:  # never leave the user hanging
         logger.exception("agent turn failed")
         reply = (
-            "Something broke while driving the browser: "
-            f"{type(exc).__name__}. Try again, or send 'reset' style wording "
-            "with a simpler request."
+            "Something broke while working on that: "
+            f"{type(exc).__name__}. Try again with a simpler request, or send "
+            "'help' to see what I can do."
         )
 
     try:
@@ -81,7 +131,7 @@ async def _handle(sender: str, body: str) -> None:
 
 @app.get("/healthz")
 async def healthz() -> dict:
-    return {"status": "ok"}
+    return {"status": "ok", "link_store": store.backend_name()}
 
 
 @app.post("/whatsapp")
@@ -104,8 +154,28 @@ async def whatsapp_webhook(
     if not sender:
         return Response(content=EMPTY_TWIML, media_type="application/xml")
 
-    if body.lower() in {"hi", "hello", "help", "start", "/start"}:
+    lowered = body.lower()
+
+    if lowered in {"hi", "hello", "help", "start", "/start", "menu"}:
         background.add_task(whatsapp.send, sender, HELP_TEXT)
+        return Response(content=EMPTY_TWIML, media_type="application/xml")
+
+    if lowered in LINK_WORDS:
+        background.add_task(_send_link, sender)
+        return Response(content=EMPTY_TWIML, media_type="application/xml")
+
+    if lowered in UNLINK_WORDS:
+        background.add_task(_do_unlink, sender)
+        return Response(content=EMPTY_TWIML, media_type="application/xml")
+
+    # Never accept credentials over chat, even if offered unprompted.
+    if "password" in lowered and (":" in body or "=" in body):
+        background.add_task(
+            whatsapp.send,
+            sender,
+            "Don't send passwords here - WhatsApp keeps this chat. Send 'link' "
+            "and type it once on the secure page instead.",
+        )
         return Response(content=EMPTY_TWIML, media_type="application/xml")
 
     if not body:
@@ -115,6 +185,6 @@ async def whatsapp_webhook(
         return Response(content=EMPTY_TWIML, media_type="application/xml")
 
     # Fast ack + async work: this is the non-negotiable timeout rule.
-    background.add_task(whatsapp.send, sender, "On it — opening the browser…")
+    background.add_task(whatsapp.send, sender, "On it\u2026")
     background.add_task(_handle, sender, body)
     return Response(content=EMPTY_TWIML, media_type="application/xml")
