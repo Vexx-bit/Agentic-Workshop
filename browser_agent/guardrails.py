@@ -1,4 +1,4 @@
-"""Human-in-the-loop guardrail for state-changing browser actions.
+"""Human-in-the-loop guardrail for state-changing actions.
 
 Design goals:
 - Reading the web is free and unblocked (snapshot, find, navigate, screenshot).
@@ -21,6 +21,10 @@ ALWAYS_CONFIRM = {
     "browser_run_code_unsafe",
     "browser_handle_dialog",
     "browser_drop",
+    # Moodle writes. These names must stay in step with
+    # browser_agent.moodle.MOODLE_WRITE_TOOL_NAMES.
+    "mark_activity_done",
+    "create_reminder",
 }
 
 # Tools that require confirmation only when the target looks side-effecting.
@@ -103,7 +107,7 @@ def require_confirmation(tool, args, tool_context):
         "blocked_tool": tool_name,
         "blocked_arguments": args,
         "message": (
-            "This action changes state on the website, so it was blocked. "
+            "This action changes state on a real system, so it was blocked. "
             "Describe the exact action to the user in plain language, ask them "
             "to reply YES to proceed, and only then call "
             "`approve_pending_action`."
@@ -112,7 +116,7 @@ def require_confirmation(tool, args, tool_context):
 
 
 def approve_pending_action(confirmed: bool, tool_context) -> dict:
-    """Approves (or rejects) the browser action that was just blocked.
+    """Approves (or rejects) the action that was just blocked.
 
     Call this ONLY after the user has explicitly agreed in the conversation.
 
