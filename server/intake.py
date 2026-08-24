@@ -11,13 +11,17 @@ So inbound media is handed to Gemini directly:
     photo       -> text and diagrams read out of the image
     document    -> the file's contents, read and explained
 
-Two details that are easy to get wrong:
+Fetching that media is the fiddly part, and it is worth spelling out because it
+silently broke once. Twilio's MediaUrl0 lives on api.twilio.com and requires the
+account credentials as HTTP basic auth. It then answers 307 with a Location
+pointing at a PRE-SIGNED CDN URL. That signed URL must be fetched WITHOUT
+credentials: the signature is already the authorisation, and sending an
+Authorization header alongside it is two auth mechanisms for one request, which
+is rejected. An HTTP client set to follow redirects automatically carries the
+header across and fails. So the hops are walked by hand below.
 
-1. Twilio media URLs are NOT public. They need the account credentials as HTTP
-   basic auth, otherwise the fetch returns 401 and the answer looks like a model
-   failure.
-2. Bytes go to the model in memory. Nothing is written to disk and no media URL
-   is passed to the model, so a student's photo does not outlive the request.
+Bytes go to the model in memory. Nothing is written to disk and no media URL is
+passed to the model, so a student's photo does not outlive the request.
 
 The transcript is always echoed back to the student. Speech recognition is
 fallible, and a wrong answer to a misheard question is far more confusing than a
@@ -28,6 +32,7 @@ from __future__ import annotations
 
 import logging
 import os
+from urllib.parse import urljoin
 
 import httpx
 
@@ -42,6 +47,7 @@ logger = logging.getLogger(__name__)
 # WhatsApp caps media around 16MB; stay under it and fail politely if not.
 MAX_MEDIA_BYTES = int(os.getenv("MAX_MEDIA_BYTES", str(12 * 1024 * 1024)))
 HTTP_TIMEOUT = float(os.getenv("MEDIA_HTTP_TIMEOUT", "30"))
+MAX_REDIRECTS = 4
 
 _DOCUMENT_TYPES = {
     "application/pdf",
@@ -88,7 +94,9 @@ _DOCUMENT_PROMPT = (
 def kind_of(content_type: str) -> str | None:
     """Maps a MIME type to one of: voice, image, document. None if unsupported."""
     mime = (content_type or "").split(";")[0].strip().lower()
-    if mime.startswith("audio/"):
+    if mime.startswith("audio/") or mime == "video/3gpp":
+        # WhatsApp voice notes arrive as audio/ogg; some Android builds send
+        # a 3gpp container for the same mic button.
         return "voice"
     if mime.startswith("image/"):
         return "image"
@@ -98,12 +106,35 @@ def kind_of(content_type: str) -> str | None:
 
 
 def _fetch(url: str) -> tuple[bytes, str]:
-    """Downloads Twilio-hosted media using the account credentials."""
-    auth = (TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-    with httpx.Client(timeout=HTTP_TIMEOUT, follow_redirects=True) as client:
-        response = client.get(url, auth=auth)
-        response.raise_for_status()
-        return response.content, response.headers.get("content-type", "")
+    """Downloads Twilio-hosted media, authenticating the first hop only.
+
+    api.twilio.com needs the account credentials and replies 307 to a
+    pre-signed CDN URL. That signed URL must be requested WITHOUT the
+    Authorization header, or it is refused as a double authorisation.
+    """
+    with httpx.Client(timeout=HTTP_TIMEOUT, follow_redirects=False) as client:
+        response = client.get(url, auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN))
+        logger.info("media hop 0: HTTP %s", response.status_code)
+
+        hops = 0
+        while response.is_redirect and hops < MAX_REDIRECTS:
+            location = response.headers.get("location", "")
+            if not location:
+                break
+            target = urljoin(str(response.url), location)
+            # No auth from here on: the URL carries its own signature.
+            response = client.get(target)
+            hops += 1
+            logger.info("media hop %d: HTTP %s", hops, response.status_code)
+
+        if response.status_code >= 400:
+            raise RuntimeError(f"media fetch returned HTTP {response.status_code}")
+
+        content_type = response.headers.get("content-type", "")
+        logger.info(
+            "media fetched: %d bytes, content-type %r", len(response.content), content_type
+        )
+        return response.content, content_type
 
 
 def read_media(url: str, content_type: str) -> dict:
@@ -117,9 +148,17 @@ def read_media(url: str, content_type: str) -> dict:
     """
     kind = kind_of(content_type)
     if kind is None:
+        logger.warning("unsupported inbound media type %r", content_type)
         return {
             "status": "unsupported",
             "error_message": f"unsupported media type: {content_type!r}",
+        }
+
+    if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN:
+        return {
+            "status": "error",
+            "kind": kind,
+            "error_message": "twilio credentials are not configured",
         }
 
     try:
@@ -140,8 +179,12 @@ def read_media(url: str, content_type: str) -> dict:
             ),
         }
 
-    # Trust the type Twilio served over the one it announced in the webhook.
-    mime = (served_type or content_type).split(";")[0].strip()
+    # Prefer the type Twilio actually served, but ignore a generic
+    # octet-stream: the model needs a real media type to decode.
+    served = (served_type or "").split(";")[0].strip().lower()
+    announced = (content_type or "").split(";")[0].strip().lower()
+    mime = served if served and served != "application/octet-stream" else announced
+
     prompt = {
         "voice": _TRANSCRIBE_PROMPT,
         "image": _IMAGE_PROMPT,
@@ -162,15 +205,16 @@ def read_media(url: str, content_type: str) -> dict:
         )
         text = (response.text or "").strip()
     except Exception as exc:
-        logger.exception("gemini could not read inbound %s", kind)
+        logger.exception("gemini could not read inbound %s (%s)", kind, mime)
         return {"status": "error", "kind": kind, "error_message": str(exc)}
 
     if not text or text in {"NO_SPEECH", "NOT_READABLE"}:
+        logger.info("inbound %s had nothing readable", kind)
         return {
             "status": "empty",
             "kind": kind,
             "error_message": "nothing readable in the media",
         }
 
-    logger.info("read inbound %s (%d bytes, %s)", kind, len(data), mime)
+    logger.info("read inbound %s: %d bytes, %s, %d chars", kind, len(data), mime, len(text))
     return {"status": "success", "kind": kind, "text": text, "bytes": len(data)}
