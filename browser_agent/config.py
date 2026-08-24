@@ -2,6 +2,11 @@
 
 Everything is read from the environment so that local dev uses a plain `.env`
 and Cloud Run can use Secret Manager-backed env vars without code changes.
+
+Every secret is stripped. A value written to Secret Manager with a trailing
+newline is a value that is one byte wrong, and the failure it produces is
+indistinguishable from a wrong credential - which cost a debugging cycle on the
+Twilio media API returning 401.
 """
 
 import os
@@ -21,8 +26,8 @@ APP_NAME = os.getenv("APP_NAME", "whatsapp_browser_agent")
 # can rebuild an image. gemini-2.5-flash started answering 404 NOT_FOUND
 # ("no longer available to new users") mid-build, and swapping this default is
 # the entire fix - no code change, no redeploy.
-AGENT_MODEL = os.getenv("AGENT_MODEL", "gemini-3.6-flash")
-VISION_MODEL = os.getenv("VISION_MODEL", "gemini-3.6-flash")
+AGENT_MODEL = os.getenv("AGENT_MODEL", "gemini-3.6-flash").strip()
+VISION_MODEL = os.getenv("VISION_MODEL", "gemini-3.6-flash").strip()
 
 # --- Browser / artifacts ---
 ARTIFACT_DIR = Path(os.getenv("BROWSER_ARTIFACT_DIR", str(REPO_ROOT / "artifacts"))).resolve()
@@ -48,11 +53,15 @@ PLAYWRIGHT_MCP_TOKEN_AUDIENCE = os.getenv("PLAYWRIGHT_MCP_TOKEN_AUDIENCE", "").s
 # apply to a TwiML response returned from the webhook, which is why
 # server/main.py answers WhatsApp inline instead of calling the API. No account
 # upgrade needed.
-TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
-TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
-TWILIO_WHATSAPP_FROM = os.getenv("TWILIO_WHATSAPP_FROM", "whatsapp:+14155238886")
-TWILIO_VALIDATE_SIGNATURE = os.getenv("TWILIO_VALIDATE_SIGNATURE", "0") in ("1", "true", "True")
-PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
+#
+# These two ARE still needed for HTTP basic auth against api.twilio.com when
+# downloading inbound media (voice notes, photos), and for validating the
+# request signature. Strip them: a stray newline here reads as a bad password.
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "").strip()
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "").strip()
+TWILIO_WHATSAPP_FROM = os.getenv("TWILIO_WHATSAPP_FROM", "whatsapp:+14155238886").strip()
+TWILIO_VALIDATE_SIGNATURE = os.getenv("TWILIO_VALIDATE_SIGNATURE", "0").strip() in ("1", "true", "True")
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
 
 # WhatsApp hard limit per message body.
 WHATSAPP_MAX_CHARS = 1500
@@ -76,6 +85,6 @@ MOODLE_TOKEN = os.getenv("MOODLE_TOKEN", "").strip()
 MOODLE_MEDIA_TTL_SECONDS = int(os.getenv("MOODLE_MEDIA_TTL_SECONDS", "900"))
 
 # --- Demo target ---
-DEMO_SITE_URL = os.getenv("DEMO_SITE_URL", "https://www.saucedemo.com")
-DEMO_USERNAME = os.getenv("DEMO_USERNAME", "")
-DEMO_PASSWORD = os.getenv("DEMO_PASSWORD", "")
+DEMO_SITE_URL = os.getenv("DEMO_SITE_URL", "https://www.saucedemo.com").strip()
+DEMO_USERNAME = os.getenv("DEMO_USERNAME", "").strip()
+DEMO_PASSWORD = os.getenv("DEMO_PASSWORD", "").strip()
