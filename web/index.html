@@ -7,6 +7,9 @@
 
   Until CONFIG.joinCode is set, the page shows a setup banner instead of a
   join phrase. It must never print a code that Twilio will reject.
+
+  Keep the command table in sync with HELP_TEXT in server/main.py. If they
+  disagree, the page is wrong: the chat is what a student actually uses.
 -->
 <html lang="en">
 <head>
@@ -47,13 +50,14 @@ code.todo{background:#fff8e1;border:1px dashed #d9b96b;color:#7a5c12}
 table{width:100%;border-collapse:collapse;background:#fff;font-size:14px;border:1px solid var(--line);border-radius:12px;overflow:hidden}
 th,td{text-align:left;padding:10px 13px;border-bottom:1px solid var(--line)}
 th{background:#fbfcfd;font-size:13px}
+td.num{width:44px;font-weight:700;color:var(--brand)}
 footer{padding:28px 0;color:var(--mute);font-size:13px}
 </style>
 </head>
 <body>
 
 <header><div class="wrap nav"><span>Study Agent</span><nav>
-<a href="#start">Get started</a><a href="#can">What it does</a><a href="#safety">Safety</a><a href="#tech">How it works</a>
+<a href="#start">Get started</a><a href="#commands">Commands</a><a href="#can">What it does</a><a href="#safety">Safety</a><a href="#tech">How it works</a>
 </nav></div></header>
 
 <div class="wrap">
@@ -72,7 +76,7 @@ footer{padding:28px 0;color:var(--mute);font-size:13px}
   this week's slides, check what you still have left. No app to install, no VPN,
   no laptop. It answers from your lecturer's own files.</p>
   <a class="cta" data-wa href="#start">Open in WhatsApp</a>
-  <a class="ghost" href="#start">Read the 4 steps</a>
+  <a class="ghost" href="#commands">See the commands</a>
   <p style="margin-top:22px">
     <span class="chip">WhatsApp &mdash; live</span>
     <span class="chip">Telegram &mdash; planned</span>
@@ -89,9 +93,9 @@ footer{padding:28px 0;color:var(--mute);font-size:13px}
     <li><b>Join the test environment.</b> Send <span data-join-wrap><code data-join>loading</code></span>.
       This runs on the Twilio WhatsApp sandbox, so every new device sends this phrase
       once. It must match exactly &mdash; any other wording is refused.</li>
-    <li><b>Link your account.</b> Send <code>link</code>. You get a private page that
-      works once and expires in ten minutes. You sign in there, on HTTPS.</li>
-    <li><b>Ask it something.</b> Try <code>what are my units</code>.</li>
+    <li><b>Link your account.</b> Send <code>1</code> (or <code>link</code>). You get a private
+      page that works once and expires in ten minutes. You sign in there, over HTTPS.</li>
+    <li><b>Ask it something.</b> Send <code>2</code> to see your units, then ask in your own words.</li>
   </ol>
   <p class="note"><b>Because this runs on the Twilio sandbox rather than an approved
   business number,</b> each device joins with the phrase above, and re-sends it after a
@@ -99,6 +103,28 @@ footer{padding:28px 0;color:var(--mute);font-size:13px}
   it, which is why it never messages you first. Those are messaging-platform rules, not
   limits of the agent: tokens, sessions and storage keys are per student, so several
   students can be joined and served at once.</p>
+</section>
+
+<section id="commands">
+  <h2>Commands</h2>
+  <p class="sub">Reply with a number, or type the words. Either works.</p>
+  <table>
+    <tr><th>Send</th><th>Or say</th><th>What happens</th></tr>
+    <tr><td class="num">1</td><td><code>link</code></td><td>Opens your one-time sign-in page and connects your e-learning account.</td></tr>
+    <tr><td class="num">2</td><td><code>my units</code></td><td>Lists the units you are actually enrolled in, this semester.</td></tr>
+    <tr><td class="num">3</td><td><code>what's due</code></td><td>Deadlines across all your units for the next two weeks.</td></tr>
+    <tr><td class="num">4</td><td><code>my progress</code></td><td>How far through each unit you are. Completion, not marks.</td></tr>
+    <tr><td class="num">5</td><td><code>help</code></td><td>The same menu, inside the chat.</td></tr>
+    <tr><td class="num">6</td><td><code>privacy</code></td><td>Exactly what is stored, and what is never touched.</td></tr>
+    <tr><td class="num">7</td><td><code>status</code></td><td>Tells you whether your account is currently linked.</td></tr>
+    <tr><td class="num">8</td><td><code>unlink</code></td><td>Deletes the agent's access to your account, immediately.</td></tr>
+  </table>
+  <p class="note"><b>Two things worth knowing.</b>
+  Capitals and full stops do not matter &mdash; <code>Help!</code>, <code>HELP</code> and
+  <code>help</code> are the same command.
+  And if an answer needs a few seconds (reading a slide deck takes longer than a text
+  message), the agent says so and asks you to send <code>more</code>; your answer is waiting
+  when you do, labelled with the question you asked.</p>
 </section>
 
 <section id="can">
@@ -113,11 +139,17 @@ footer{padding:28px 0;color:var(--mute);font-size:13px}
     <div class="card"><b>Remind me</b><span>Writes a private reminder into your own e-learning calendar.</span></div>
   </div>
   <h3>Things to try</h3>
-  <div class="say">what is mobile programming about now</div>
-  <div class="say">send me the assignment questions for mobile programming</div>
-  <div class="say">explain recyclerview from our slides</div>
-  <div class="say">what have I not finished in software testing</div>
+  <p class="sub">Replace <code>&lt;unit&gt;</code> with any unit you take &mdash; by code or by name.</p>
+  <div class="say">what is &lt;unit&gt; about now</div>
+  <div class="say">send me the assignment questions for &lt;unit&gt;</div>
+  <div class="say">explain &lt;topic&gt; from our notes</div>
+  <div class="say">what notes are there for &lt;unit&gt;</div>
+  <div class="say">what have I not finished in &lt;unit&gt;</div>
   <div class="say">remind me on Friday 6pm to finish the lab</div>
+  <p class="note">Your units are read from your own enrolment, so this works whatever you
+  study &mdash; nursing, business, education, law, engineering, computing. The agent never
+  assumes a course: it asks your account what you are registered for, then answers from
+  the files your own lecturers uploaded.</p>
 </section>
 
 <section id="safety">
@@ -135,10 +167,11 @@ footer{padding:28px 0;color:var(--mute);font-size:13px}
   <table>
     <tr><th>Question</th><th>Answer</th></tr>
     <tr><td>Where do I type my password?</td><td>On a one-time HTTPS page, never in the chat.</td></tr>
+    <tr><td>Why not just type it in the chat?</td><td>Chat history is stored on your phone and by the messaging provider. A password that is never sent there cannot leak from there.</td></tr>
     <tr><td>Is it stored?</td><td>No. It is swapped for an access token in a single request, then discarded. Never logged.</td></tr>
     <tr><td>What is kept?</td><td>The access token, filed under a salted hash of your phone number.</td></tr>
     <tr><td>Can it see other students?</td><td>No. Your token carries only your own permissions.</td></tr>
-    <tr><td>How do I revoke it?</td><td>Send <code>unlink</code>. The token is deleted immediately.</td></tr>
+    <tr><td>How do I revoke it?</td><td>Send <code>8</code> or <code>unlink</code>. The token is deleted immediately.</td></tr>
   </table>
 </section>
 
@@ -160,6 +193,13 @@ footer{padding:28px 0;color:var(--mute);font-size:13px}
   the phone number, so the datastore is not a list of student numbers. Turns are
   serialised per sender and run concurrently across senders, with a cap on total
   in-flight work.</p>
+
+  <h3>Answering inside the webhook</h3>
+  <p>The reply is returned in the webhook response itself, and an agent turn is raced
+  against that window. Win, and the answer arrives immediately; lose, and the turn keeps
+  running in the background while the student is told to send <code>more</code>. Queued
+  answers are labelled with the question that produced them, so a late reply can never
+  be mistaken for an answer to whatever was asked next.</p>
 
   <h3>The messaging layer is an adapter</h3>
   <p>Nothing above the webhook knows which chat app a student is using. The sender key
@@ -190,7 +230,7 @@ footer{padding:28px 0;color:var(--mute);font-size:13px}
 // This Twilio account exposes TWO WhatsApp surfaces, and they are not
 // interchangeable:
 //
-//   1. "Try out WhatsApp" trial panel - sender 17372508034, shared phrase
+//   1. "Try out WhatsApp" trial panel - rotating sender, shared phrase
 //      "join twilio-trial". Outbound is template-only: a free-form body is
 //      rejected with 21654 ContentSid Required, so an agent cannot reply
 //      through it. There is no webhook field. Do not use it.
