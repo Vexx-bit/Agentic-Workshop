@@ -69,41 +69,19 @@ Twilio sandbox webhook  ->  FastAPI ingress          (server/main.py)
                               v
                             ADK agent                (browser_agent/agent.py)
                               |
-                    +---------+-----------------------------+
-                    |                                       |
-                    v                                       v
-            Moodle REST tools                     Playwright MCP toolset
-            per-student token                     present but OFF by default
-            (moodle.py, study.py)                 ENABLE_BROWSER_TOOLS=1
-                    |                                       |
-                    +---------+-----------------------------+
+                    +---------+--------
+                    |                 |
+                    v                 |
+            Moodle REST tools         |
+            per-student token         |
+            (moodle.py, study.py)     |
+                    |                 |
+                    +---------+--------
                               v
                         TwiML reply, or `more`   (server/outbox.py)
 ```
 
-### Why the e-learning site is reached over its API, not the browser
 
-This started as a browser agent and the browser still builds and deploys. It is
-switched off in the hot path for two concrete reasons:
-
-- The e-learning platform sets `limitconcurrentlogins: 1`. A headless login
-  would log a student out of their own laptop mid-class. Web-service API calls
-  do not consume that session, which is also why many students can use the bot
-  at the same time.
-- Reopening an MCP session on every turn cost seconds inside a 13 second reply
-  budget, before Gemini was even called.
-
-So the browser is kept as a capability, not a dependency: set
-`ENABLE_BROWSER_TOOLS=1` and the Playwright toolset plus the screenshot-to-
-Gemini vision fallback are registered again. Left at `0`, they are never even
-imported into the tool list.
-
-### The messaging platform is an adapter
-
-`browser_agent/` knows nothing about Twilio. Swapping to Meta's WhatsApp Cloud
-API, or waking the dormant Telegram route, touches `server/` only.
-
----
 
 ## Project structure
 
@@ -151,8 +129,6 @@ API, or waking the dormant Telegram route, touches `server/` only.
 `-- multi_tool_agent/         original multi-tool pattern, kept as reference
 ```
 
-The two workshop folders are deliberately untouched, so the repo still reads as
-the skeleton it grew from.
 
 ---
 
