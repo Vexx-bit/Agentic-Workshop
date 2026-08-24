@@ -1,274 +1,302 @@
 <!doctype html>
-<!--
-  Static onboarding + technical page. No build step, no framework, no API keys.
-
-  Deploy: Vercel > New Project > this repo > Root Directory = web
-  Then fill in the CONFIG object at the bottom of this file and redeploy.
-
-  Until CONFIG.joinCode is set, the page shows a setup banner instead of a
-  join phrase. It must never print a code that Twilio will reject.
-
-  Keep the command table in sync with HELP_TEXT in server/main.py. If they
-  disagree, the page is wrong: the chat is what a student actually uses.
--->
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Study Agent on WhatsApp</title>
-<meta name="description" content="Ask your university e-learning account anything on WhatsApp: topics, notes, assignment questions and deadlines.">
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Study assistant on WhatsApp</title>
+<meta name="description" content="Ask your e-learning account anything over WhatsApp - type it, say it, or photograph it. Built with Gemini and the Agent Development Kit." />
 <style>
-:root{--ink:#0f172a;--mute:#5b6577;--line:#e4e7ec;--brand:#128c7e;--bg:#f7f8fa}
-*{box-sizing:border-box}
-body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--ink);background:var(--bg);line-height:1.6}
-.wrap{max-width:860px;margin:0 auto;padding:0 20px}
-header{background:#fff;border-bottom:1px solid var(--line)}
-.nav{display:flex;justify-content:space-between;align-items:center;padding:16px 0;font-weight:700}
-.nav a{color:var(--mute);text-decoration:none;font-weight:500;margin-left:18px;font-size:14px}
-.setup{display:none;background:#fff8e1;border:1px solid #f0d68a;border-radius:12px;padding:14px 16px;margin:20px 0 0;font-size:14px}
-.setup b{display:block;margin-bottom:4px}
-.hero{padding:44px 0 40px}
-h1{font-size:34px;line-height:1.2;margin:0 0 12px}
-.lede{font-size:18px;color:var(--mute);margin:0 0 26px}
-.cta{display:inline-block;background:var(--brand);color:#fff;text-decoration:none;font-weight:600;padding:13px 22px;border-radius:10px}
-.ghost{display:inline-block;margin-left:10px;padding:13px 18px;border:1px solid var(--line);border-radius:10px;background:#fff;color:var(--ink);text-decoration:none;font-weight:600}
-.chip{display:inline-block;font-size:12px;color:var(--mute);border:1px solid var(--line);background:#fff;border-radius:999px;padding:4px 11px;margin:0 6px 6px 0}
-section{padding:34px 0;border-top:1px solid var(--line)}
-h2{font-size:22px;margin:0 0 6px}
-h3{font-size:15px;margin:20px 0 4px}
-.sub{color:var(--mute);margin:0 0 18px}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px}
-.card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px}
-.card b{display:block;margin-bottom:4px}
-.card span{color:var(--mute);font-size:14px}
-ol{padding-left:20px}li{margin-bottom:10px}
-code{background:#eef1f5;border-radius:5px;padding:2px 6px;font-size:13px}
-code.todo{background:#fff8e1;border:1px dashed #d9b96b;color:#7a5c12}
-.say{background:#fff;border:1px solid var(--line);border-left:3px solid var(--brand);border-radius:8px;padding:9px 13px;margin:7px 0;font-size:15px}
-.no{background:#fff;border:1px solid var(--line);border-left:3px solid #d64545;border-radius:8px;padding:9px 13px;margin:7px 0;font-size:15px}
-.note{background:#fff;border:1px solid var(--line);border-radius:10px;padding:11px 14px;margin:14px 0 0;font-size:14px;color:var(--mute)}
-table{width:100%;border-collapse:collapse;background:#fff;font-size:14px;border:1px solid var(--line);border-radius:12px;overflow:hidden}
-th,td{text-align:left;padding:10px 13px;border-bottom:1px solid var(--line)}
-th{background:#fbfcfd;font-size:13px}
-td.num{width:44px;font-weight:700;color:var(--brand)}
-footer{padding:28px 0;color:var(--mute);font-size:13px}
+  :root {
+    --bg: #0b0d0c;
+    --panel: #121514;
+    --line: #1f2422;
+    --text: #e8ece9;
+    --muted: #8b958f;
+    --accent: #25d366;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 0 24px; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  nav {
+    position: sticky; top: 0; z-index: 10;
+    background: rgba(11,13,12,.88);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--line);
+  }
+  nav .wrap { display: flex; gap: 22px; align-items: center; height: 56px; }
+  nav b { font-weight: 600; margin-right: auto; font-size: 15px; }
+  nav a { color: var(--muted); font-size: 14px; }
+  nav a:hover { color: var(--text); text-decoration: none; }
+
+  header { padding: 88px 0 56px; }
+  h1 { font-size: 40px; line-height: 1.15; letter-spacing: -.02em; margin: 0 0 18px; font-weight: 650; }
+  .lede { font-size: 19px; color: var(--muted); margin: 0 0 32px; }
+  .lede b { color: var(--text); font-weight: 600; }
+
+  .cta { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+  .btn {
+    display: inline-block; background: var(--accent); color: #07130c;
+    font-weight: 650; font-size: 15px; padding: 12px 20px; border-radius: 8px;
+  }
+  .btn:hover { text-decoration: none; opacity: .9; }
+  .ghost {
+    display: inline-flex; gap: 8px; align-items: center;
+    border: 1px solid var(--line); border-radius: 8px;
+    padding: 11px 14px; font-size: 14px; color: var(--muted);
+    background: none; cursor: pointer; font-family: inherit;
+  }
+  .ghost code { color: var(--text); font-size: 13px; }
+
+  section { padding: 40px 0; border-top: 1px solid var(--line); }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .09em; color: var(--muted); font-weight: 600; margin: 0 0 24px; }
+  h3 { font-size: 16px; margin: 0 0 6px; font-weight: 600; }
+  p { margin: 0 0 14px; }
+  .muted { color: var(--muted); }
+  .small { font-size: 14px; }
+
+  ol.steps { margin: 0; padding: 0; list-style: none; counter-reset: s; }
+  ol.steps li { counter-increment: s; position: relative; padding: 0 0 22px 40px; }
+  ol.steps li::before {
+    content: counter(s);
+    position: absolute; left: 0; top: 1px;
+    width: 24px; height: 24px; border-radius: 50%;
+    border: 1px solid var(--line); color: var(--muted);
+    font-size: 13px; display: grid; place-items: center;
+  }
+  ol.steps li:last-child { padding-bottom: 0; }
+
+  .grid { display: grid; gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  @media (min-width: 620px) { .grid.two { grid-template-columns: 1fr 1fr; } }
+  .cell { background: var(--panel); padding: 20px; }
+  .cell p { margin: 0; color: var(--muted); font-size: 14px; }
+
+  .ask { margin: 0 0 26px; }
+  .ask:last-child { margin-bottom: 0; }
+  .ask h3 { font-size: 14px; color: var(--muted); font-weight: 600; margin-bottom: 10px; }
+  .ask ul { margin: 0; padding: 0; list-style: none; }
+  .ask li {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+    padding: 10px 14px; margin: 0 0 8px; font-size: 15px;
+  }
+  .ask li::before { content: "\201C"; color: var(--muted); }
+  .ask li::after { content: "\201D"; color: var(--muted); }
+
+  dl { margin: 0; }
+  dt { font-weight: 600; font-size: 15px; margin: 0 0 2px; }
+  dd { margin: 0 0 18px; color: var(--muted); font-size: 14px; }
+  dd:last-child { margin-bottom: 0; }
+
+  .flow {
+    font: 13px/2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color: var(--muted); background: var(--panel);
+    border: 1px solid var(--line); border-radius: 10px;
+    padding: 18px; overflow-x: auto; white-space: pre; margin: 0 0 22px;
+  }
+  .note { font-size: 13px; color: var(--muted); }
+  footer { padding: 40px 0 72px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
 </style>
 </head>
 <body>
 
-<header><div class="wrap nav"><span>Study Agent</span><nav>
-<a href="#start">Get started</a><a href="#commands">Commands</a><a href="#can">What it does</a><a href="#safety">Safety</a><a href="#tech">How it works</a>
-</nav></div></header>
+<nav><div class="wrap">
+  <b>Study assistant</b>
+  <a href="#start">Start</a>
+  <a href="#ask">Ask</a>
+  <a href="#safety">Safety</a>
+  <a href="#build">Build</a>
+</div></nav>
 
-<div class="wrap">
-
-<div class="setup" id="setup">
-  <b>Not configured yet &mdash; visible to you and to visitors.</b>
-  Open <code>web/index.html</code>, scroll to the <code>CONFIG</code> object at the bottom,
-  and set <code>joinCode</code> to the phrase shown in the Twilio Console under
-  <i>Messaging &rsaquo; Try it out &rsaquo; Send a WhatsApp message &rsaquo; Sandbox</i>.
-  Then redeploy.
-</div>
-
-<div class="hero">
-  <h1>Your e-learning account, on WhatsApp.</h1>
-  <p class="lede">Ask what a topic is about, get the assignment questions, pull down
-  this week's slides, check what you still have left. No app to install, no VPN,
-  no laptop. It answers from your lecturer's own files.</p>
-  <a class="cta" data-wa href="#start">Open in WhatsApp</a>
-  <a class="ghost" href="#commands">See the commands</a>
-  <p style="margin-top:22px">
-    <span class="chip">WhatsApp &mdash; live</span>
-    <span class="chip">Telegram &mdash; planned</span>
-    <span class="chip">Built on Google ADK + Gemini</span>
-  </p>
-</div>
-
-<section id="start">
-  <h2>Get started</h2>
-  <p class="sub">About a minute. You will not type your password into a chat at any point.</p>
-  <ol>
-    <li><b>Save the number.</b> <code data-wa-number>loading</code> &mdash; or just tap
-      <a data-wa href="#start">Open in WhatsApp</a>.</li>
-    <li><b>Join the test environment.</b> Send <span data-join-wrap><code data-join>loading</code></span>.
-      This runs on the Twilio WhatsApp sandbox, so every new device sends this phrase
-      once. It must match exactly &mdash; any other wording is refused.</li>
-    <li><b>Link your account.</b> Send <code>1</code> (or <code>link</code>). You get a private
-      page that works once and expires in ten minutes. You sign in there, over HTTPS.</li>
-    <li><b>Ask it something.</b> Send <code>2</code> to see your units, then ask in your own words.</li>
-  </ol>
-  <p class="note"><b>Because this runs on the Twilio sandbox rather than an approved
-  business number,</b> each device joins with the phrase above, and re-sends it after a
-  long gap without messages. The agent can reply freely for 24 hours after you message
-  it, which is why it never messages you first. Those are messaging-platform rules, not
-  limits of the agent: tokens, sessions and storage keys are per student, so several
-  students can be joined and served at once.</p>
-</section>
-
-<section id="commands">
-  <h2>Commands</h2>
-  <p class="sub">Reply with a number, or type the words. Either works.</p>
-  <table>
-    <tr><th>Send</th><th>Or say</th><th>What happens</th></tr>
-    <tr><td class="num">1</td><td><code>link</code></td><td>Opens your one-time sign-in page and connects your e-learning account.</td></tr>
-    <tr><td class="num">2</td><td><code>my units</code></td><td>Lists the units you are actually enrolled in, this semester.</td></tr>
-    <tr><td class="num">3</td><td><code>what's due</code></td><td>Deadlines across all your units for the next two weeks.</td></tr>
-    <tr><td class="num">4</td><td><code>my progress</code></td><td>How far through each unit you are. Completion, not marks.</td></tr>
-    <tr><td class="num">5</td><td><code>help</code></td><td>The same menu, inside the chat.</td></tr>
-    <tr><td class="num">6</td><td><code>privacy</code></td><td>Exactly what is stored, and what is never touched.</td></tr>
-    <tr><td class="num">7</td><td><code>status</code></td><td>Tells you whether your account is currently linked.</td></tr>
-    <tr><td class="num">8</td><td><code>unlink</code></td><td>Deletes the agent's access to your account, immediately.</td></tr>
-  </table>
-  <p class="note"><b>Two things worth knowing.</b>
-  Capitals and full stops do not matter &mdash; <code>Help!</code>, <code>HELP</code> and
-  <code>help</code> are the same command.
-  And if an answer needs a few seconds (reading a slide deck takes longer than a text
-  message), the agent says so and asks you to send <code>more</code>; your answer is waiting
-  when you do, labelled with the question you asked.</p>
-</section>
-
-<section id="can">
-  <h2>What it does</h2>
-  <p class="sub">Send any of these in plain English.</p>
-  <div class="grid">
-    <div class="card"><b>Explain a topic</b><span>Reads the actual slides your lecturer uploaded and explains them, naming the file.</span></div>
-    <div class="card"><b>Assignment questions</b><span>The questions, the deadline, the accepted file types and the size cap.</span></div>
-    <div class="card"><b>Send me the notes</b><span>Download links for a unit's slides and documents, straight into the chat.</span></div>
-    <div class="card"><b>What's due</b><span>Upcoming deadlines across every unit you are enrolled in.</span></div>
-    <div class="card"><b>How am I doing</b><span>Completion progress per unit, and what is still outstanding.</span></div>
-    <div class="card"><b>Remind me</b><span>Writes a private reminder into your own e-learning calendar.</span></div>
+<header><div class="wrap">
+  <h1>Your coursework, over WhatsApp.</h1>
+  <p class="lede">Ask what a topic covers, what an assignment actually wants, or what is due &mdash; in <b>your own words</b>. Type it, say it, or photograph it. Answers come from <b>your lecturer's own files</b>, not from the internet.</p>
+  <div class="cta">
+    <a class="btn" id="open-chat" href="#start">Open in WhatsApp</a>
+    <button class="ghost" id="copy-code" type="button">First message: <code id="join-code"></code></button>
   </div>
-  <h3>Things to try</h3>
-  <p class="sub">Replace <code>&lt;unit&gt;</code> with any unit you take &mdash; by code or by name.</p>
-  <div class="say">what is &lt;unit&gt; about now</div>
-  <div class="say">send me the assignment questions for &lt;unit&gt;</div>
-  <div class="say">explain &lt;topic&gt; from our notes</div>
-  <div class="say">what notes are there for &lt;unit&gt;</div>
-  <div class="say">what have I not finished in &lt;unit&gt;</div>
-  <div class="say">remind me on Friday 6pm to finish the lab</div>
-  <p class="note">Your units are read from your own enrolment, so this works whatever you
-  study &mdash; nursing, business, education, law, engineering, computing. The agent never
-  assumes a course: it asks your account what you are registered for, then answers from
-  the files your own lecturers uploaded.</p>
-</section>
+</div></header>
 
-<section id="safety">
-  <h2>What it will never do</h2>
-  <p class="sub">These are refused in code, not just discouraged by a prompt.</p>
-  <div class="no">Submit your coursework, or upload a file on your behalf</div>
-  <div class="no">Open, answer or submit a quiz</div>
-  <div class="no">Read or write any grade</div>
-  <div class="no">Post to a forum in your name</div>
-  <p style="color:var(--mute);font-size:14px">It fetches the questions and the material.
-  You do the work and you submit it. That line is deliberate: an agent that could
-  hand in your assignment is a cheating tool, not a study tool.</p>
+<section id="start"><div class="wrap">
+  <h2>Getting started</h2>
+  <ol class="steps">
+    <li>
+      <h3>Say hello</h3>
+      <p class="muted small">Open the chat and send the join phrase above. This is a sandbox number, so that phrase is how it knows to let you in. It lasts 72 hours, then just send it again.</p>
+    </li>
+    <li>
+      <h3>Link your account</h3>
+      <p class="muted small">Send <b>link</b>. You get a one-time page that expires in 10 minutes. Sign in there &mdash; your password is swapped for an access token on that page, and never goes into the chat.</p>
+    </li>
+    <li>
+      <h3>Ask anything</h3>
+      <p class="muted small">That is it. No commands to learn. Send <b>help</b> any time for ideas, or <b>unlink</b> to delete everything.</p>
+    </li>
+  </ol>
+</div></section>
 
-  <h3>Your credentials</h3>
-  <table>
-    <tr><th>Question</th><th>Answer</th></tr>
-    <tr><td>Where do I type my password?</td><td>On a one-time HTTPS page, never in the chat.</td></tr>
-    <tr><td>Why not just type it in the chat?</td><td>Chat history is stored on your phone and by the messaging provider. A password that is never sent there cannot leak from there.</td></tr>
-    <tr><td>Is it stored?</td><td>No. It is swapped for an access token in a single request, then discarded. Never logged.</td></tr>
-    <tr><td>What is kept?</td><td>The access token, filed under a salted hash of your phone number.</td></tr>
-    <tr><td>Can it see other students?</td><td>No. Your token carries only your own permissions.</td></tr>
-    <tr><td>How do I revoke it?</td><td>Send <code>8</code> or <code>unlink</code>. The token is deleted immediately.</td></tr>
-  </table>
-</section>
+<section id="send"><div class="wrap">
+  <h2>Four ways to ask</h2>
+  <div class="grid two">
+    <div class="cell">
+      <h3>Type it</h3>
+      <p>Full sentences, half sentences, typos, English or Kiswahili. There is no syntax to get wrong.</p>
+    </div>
+    <div class="cell">
+      <h3>Say it</h3>
+      <p>Hold the mic and ask out loud. The voice note is transcribed, repeated back so you can see it heard you right, then answered.</p>
+    </div>
+    <div class="cell">
+      <h3>Photograph it</h3>
+      <p>Snap a question, a slide or the whiteboard. Text and diagrams are read out of the image and explained against your own notes.</p>
+    </div>
+    <div class="cell">
+      <h3>Forward a file</h3>
+      <p>Send a PDF and get it read back in plain language &mdash; what it asks, what format it wants, when it is due.</p>
+    </div>
+  </div>
+</div></section>
 
-<section id="tech">
-  <h2>How it works</h2>
-  <p class="sub">For the judges, and for anyone who wants to fork it.</p>
-  <p><code>WhatsApp &rarr; Twilio webhook &rarr; FastAPI on Cloud Run &rarr; Google ADK agent &rarr; e-learning web-service API</code></p>
+<section id="ask"><div class="wrap">
+  <h2>Things to ask</h2>
+  <p class="muted small">Replace &lt;unit&gt; with any unit you take &mdash; by code or by name. Your units are read from your own account, whatever course you are on.</p>
 
-  <h3>Two paths, chosen explicitly</h3>
-  <p>The agent has a browser (Playwright MCP, DOM-first with a Gemini vision fallback
-  for anything the accessibility tree cannot expose) and it has a REST toolset. The
-  e-learning site is <b>always</b> reached over REST, never the browser: the site
-  allows one interactive session per user, so a headless login there could log a
-  student out of their own laptop mid-class. Token calls do not consume that session,
-  which is also why many students can use the bot at the same time.</p>
+  <div class="ask">
+    <h3>Units and deadlines</h3>
+    <ul>
+      <li>what are my units this semester</li>
+      <li>what is due in the next two weeks</li>
+      <li>anything due this week I have not finished</li>
+    </ul>
+  </div>
 
-  <h3>Many students, one deployment</h3>
-  <p>Each student holds their own token. Sessions and store keys are salted hashes of
-  the phone number, so the datastore is not a list of student numbers. Turns are
-  serialised per sender and run concurrently across senders, with a cap on total
-  in-flight work.</p>
+  <div class="ask">
+    <h3>Topics and notes</h3>
+    <ul>
+      <li>what is &lt;unit&gt; about now</li>
+      <li>explain &lt;topic&gt; from our notes, I missed the class</li>
+      <li>what notes are there for &lt;unit&gt;</li>
+    </ul>
+  </div>
 
-  <h3>Answering inside the webhook</h3>
-  <p>The reply is returned in the webhook response itself, and an agent turn is raced
-  against that window. Win, and the answer arrives immediately; lose, and the turn keeps
-  running in the background while the student is told to send <code>more</code>. Queued
-  answers are labelled with the question that produced them, so a late reply can never
-  be mistaken for an answer to whatever was asked next.</p>
+  <div class="ask">
+    <h3>Assignments</h3>
+    <ul>
+      <li>send me the assignment questions for &lt;unit&gt;</li>
+      <li>what format does that one have to be in</li>
+      <li>send me the brief document</li>
+    </ul>
+  </div>
 
-  <h3>The messaging layer is an adapter</h3>
-  <p>Nothing above the webhook knows which chat app a student is using. The sender key
-  carries the channel, and one dispatch function picks the transport, so a second
-  interface is a file rather than a rewrite. That mattered in practice: the newer Twilio
-  trial sender only accepts pre-approved message templates, which cannot carry an
-  agent's free-form answers, so the build targets the sandbox sender that can.</p>
+  <div class="ask">
+    <h3>Revision</h3>
+    <ul>
+      <li>quiz me on &lt;topic&gt;</li>
+      <li>I have a CAT on Friday, test me</li>
+      <li>which topics am I weakest on</li>
+    </ul>
+  </div>
 
-  <h3>Guardrails</h3>
-  <p>A server-side allowlist decides which API functions can be called at all, and a
-  second independent denylist permanently blocks submission, quiz and grade
-  functions. Anything state-changing stops and asks for a plain-language YES first.
-  Course content is treated as untrusted data, so a prompt hidden in a slide deck
-  cannot redirect the agent. Inbound webhooks are rejected unless they carry a valid
-  Twilio signature.</p>
+  <div class="ask">
+    <h3>Planning</h3>
+    <ul>
+      <li>what should I work on today</li>
+      <li>I am behind, where do I start</li>
+      <li>how far am I in each of my units</li>
+    </ul>
+  </div>
 
-  <h3>Stack</h3>
-  <p><span class="chip">Google ADK</span><span class="chip">Gemini</span><span class="chip">FastAPI</span><span class="chip">Cloud Run</span><span class="chip">Playwright MCP</span><span class="chip">Twilio WhatsApp</span><span class="chip">Secret Manager</span></p>
-</section>
+  <p class="note">Capitals and punctuation do not matter. If something takes a few seconds it says so &mdash; send <b>more</b> and the answer is waiting. Prefer tapping? <b>1</b> link &middot; <b>2</b> my units &middot; <b>3</b> what is due &middot; <b>4</b> my progress &middot; <b>5</b> help &middot; <b>6</b> privacy &middot; <b>7</b> status &middot; <b>8</b> unlink.</p>
+</div></section>
 
-<footer>Built for the Agentic AI Workshop hackathon. Not affiliated with any university.</footer>
+<section id="safety"><div class="wrap">
+  <h2>What it will and will not do</h2>
+  <dl>
+    <dt>Your password is never in the chat</dt>
+    <dd>You type it once on a single-use HTTPS page, where it is exchanged for an access token. WhatsApp keeps your message history forever &mdash; which is exactly why a password must never be typed into it.</dd>
 
-</div>
+    <dt>Your number is stored as a one-way hash</dt>
+    <dd>Enough to find your access again, not enough to read your number back out.</dd>
+
+    <dt>Voice notes and photos are not kept</dt>
+    <dd>They are read in memory to answer you, never written to disk.</dd>
+
+    <dt>It cannot submit your work</dt>
+    <dd>Submitting, uploading, attempting a quiz and changing a grade are blocked in code, not merely discouraged. It fetches, explains, quizzes and reminds. You hand in your own work.</dd>
+
+    <dt>Only your own account</dt>
+    <dd>Every student links separately and sees only their own units. Nobody else's coursework is reachable from your chat.</dd>
+
+    <dt>Leave whenever</dt>
+    <dd>Send <b>unlink</b> and the stored access is deleted immediately.</dd>
+  </dl>
+</div></section>
+
+<section id="build"><div class="wrap">
+  <h2>How it is built</h2>
+  <div class="flow">WhatsApp  &rarr;  Twilio webhook  &rarr;  FastAPI on Cloud Run
+                              &rarr;  Gemini reads voice / image / PDF
+                              &rarr;  ADK agent (tool calling)
+                                      &rarr;  e-learning REST API, per-student token
+                                      &rarr;  Playwright MCP, DOM first
+                                      &rarr;  vision fallback on screenshot
+                              &rarr;  reply, inline in the webhook</div>
+  <dl>
+    <dt>Grounded, not guessed</dt>
+    <dd>Course answers come from the lecturer's own slides and briefs, read at question time. Quiz questions are generated from those same files, so revision matches what is actually examined.</dd>
+
+    <dt>Multimodal in, plain language out</dt>
+    <dd>Gemini handles the audio, the image and the document directly &mdash; no separate speech or OCR service in the path.</dd>
+
+    <dt>REST for coursework, browser for the open web</dt>
+    <dd>The e-learning platform allows one session per user, so driving it in a browser would log a student out mid-class. Coursework goes through its API; the browser tools are for any other site.</dd>
+
+    <dt>Answers inside the webhook</dt>
+    <dd>The reply is returned in the webhook response rather than sent through the messaging API, which trial accounts restrict to templates. Work is raced against that window: if it wins, the answer is immediate; if it loses, it finishes in the background and waits for <b>more</b>.</dd>
+
+    <dt>Many students at once</dt>
+    <dd>Sessions, tokens and locks are keyed per sender, so concurrent students never share state.</dd>
+  </dl>
+</div></section>
+
+<footer><div class="wrap">
+  Built with Gemini and the Google Agent Development Kit, on Cloud Run.
+  <span id="year"></span>
+</div></footer>
 
 <script>
-// The only thing to edit. No secrets belong on this page.
-//
-// This Twilio account exposes TWO WhatsApp surfaces, and they are not
-// interchangeable:
-//
-//   1. "Try out WhatsApp" trial panel - rotating sender, shared phrase
-//      "join twilio-trial". Outbound is template-only: a free-form body is
-//      rejected with 21654 ContentSid Required, so an agent cannot reply
-//      through it. There is no webhook field. Do not use it.
-//   2. Classic Sandbox - sender 14155238886, a unique per-account phrase, and
-//      a "When a message comes in" webhook field. Free-form replies allowed
-//      for 24h after the student messages in. This is the one we use.
-//
-// waNumber: digits only, no plus sign.
-// joinCode: the exact phrase from the Sandbox tab. Leave empty rather than
-//   guessing - a wrong phrase is refused, and the page shows a setup banner.
-const CONFIG = {
-  waNumber: "14155238886",       // Twilio WhatsApp sandbox number, digits only
-  joinCode: "join strong-swung", // exact phrase from the Sandbox tab
-  telegram: ""                   // reserved for a second interface
-};
+  // Assembled at runtime rather than written as literal URLs in the markup.
+  var CONFIG = { waNumber: "14155238886", joinCode: "join strong-swung" };
 
-const joinCode = (CONFIG.joinCode || "").trim();
-// Guard against the placeholder ever shipping again.
-const configured = joinCode.length > 0 && !/example/i.test(joinCode);
+  var code = document.getElementById("join-code");
+  code.textContent = CONFIG.joinCode;
 
-const waBase = "https:" + "//wa.me/" + CONFIG.waNumber;
-const waLink = configured
-  ? waBase + "?text=" + encodeURIComponent(joinCode)
-  : waBase;
+  var chat = document.getElementById("open-chat");
+  chat.href = "https:" + "//wa.me/" + CONFIG.waNumber +
+              "?text=" + encodeURIComponent(CONFIG.joinCode);
 
-document.querySelectorAll("[data-wa]").forEach(function (el) { el.href = waLink; });
-document.querySelectorAll("[data-wa-number]").forEach(function (el) {
-  el.textContent = "+" + CONFIG.waNumber;
-});
+  var copy = document.getElementById("copy-code");
+  copy.addEventListener("click", function () {
+    var done = function () {
+      var was = copy.innerHTML;
+      copy.textContent = "Copied";
+      setTimeout(function () { copy.innerHTML = was; }, 1400);
+    };
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(CONFIG.joinCode).then(done, function () {});
+    }
+  });
 
-document.querySelectorAll("[data-join]").forEach(function (el) {
-  el.textContent = configured ? joinCode : "your join phrase";
-  if (!configured) { el.className = "todo"; }
-});
-
-if (!configured) {
-  document.getElementById("setup").style.display = "block";
-}
+  document.getElementById("year").textContent = new Date().getFullYear();
 </script>
+
 </body>
 </html>
