@@ -1,7 +1,7 @@
 """FastAPI ingress for the study agent (Twilio WhatsApp + Telegram).
 
-Why the two channels reply differently
--------------------------------------
+Why WhatsApp answers inside the webhook
+---------------------------------------
 Twilio trial accounts refuse free-form message bodies on the REST API:
 Messages.json answers 400 `21654 ContentSid Required` for any `body`, on every
 WhatsApp sender including the sandbox. Verified with a raw curl, so it is an
@@ -22,26 +22,21 @@ answer arrives after the student has already asked something else, and reads as
 though the assistant ignored the question - which is exactly how it looked in
 testing.
 
-Three kinds of question
------------------------
-Text, voice note, and photo/document. The same trial restriction bites the other
-way for media: fetching MediaUrl0 answers 20003 ("not available on a Trial
-account"), so the bytes of an inbound voice note are unreachable here no matter
-what this code does.
-
-Rather than lose the microphone and the camera - which is how people actually
-communicate on WhatsApp, and the part of this product that most needs Gemini -
-media goes around Twilio. Sending a voice note gets a one-time upload link, the
-student records or photographs on that page, and the bytes arrive directly. See
-server/upload.py. If the account is ever upgraded, TWILIO_MEDIA_FETCH=1 restores
-the inline path with no code change.
+Why attachments are declined
+----------------------------
+The same trial restriction bites the other way for media: fetching MediaUrl0
+answers 20003 ("not available on a Trial account"), while the identical
+credentials read Messages.json fine. The bytes of an inbound voice note or photo
+are simply unreachable, so an attachment gets one honest line rather than a
+failure that looks like a bug. Students are pointed at what works better anyway:
+naming the unit, so the agent pulls the lecturer's real brief instead of reading
+a photo of it.
 
 Routes
 ------
     POST /whatsapp        Twilio webhook (replies with TwiML)
     POST /telegram        Telegram webhook (replies over the Bot API)
     GET|POST /link/{id}   single-use page where a student links their own Moodle
-    GET|POST /upload/{id} single-use page for a voice note, photo or file
     GET  /media/{id}      short-lived proxy for Moodle files
 
 The channel is carried in the sender key: "whatsapp:+254..." or
@@ -72,12 +67,10 @@ from browser_agent.config import (
     TWILIO_VALIDATE_SIGNATURE,
 )
 from server import format as fmt
-from server import intake, outbox, telegram, whatsapp
+from server import outbox, telegram, whatsapp
 from server.link import router as link_router
 from server.media import router as media_router
 from server.runner import run_turn
-from server.upload import link_for as upload_link_for
-from server.upload import router as upload_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("whatsapp-browser-agent")
@@ -85,7 +78,6 @@ logger = logging.getLogger("whatsapp-browser-agent")
 app = FastAPI(title="Study Agent (WhatsApp + Telegram)")
 app.include_router(media_router)
 app.include_router(link_router)
-app.include_router(upload_router)
 
 TELEGRAM_PREFIX = "telegram:"
 
@@ -103,18 +95,19 @@ WELCOME_TEXT = (
     "I read your own e-learning account and answer in plain language: what a "
     "topic covers, what the notes say, what an assignment actually asks for, "
     "what is due.\n\n"
-    "*Talk to me normally.* Full sentences, your own words - however you'd ask "
-    "a classmate.\n\n"
+    "*Talk to me normally.* Full sentences, half sentences, English or "
+    "Kiswahili - however you'd ask a classmate. There's no syntax to get "
+    "wrong.\n\n"
     "To get started, send: link\n\n"
     "That opens a private one-time page where you sign in. Your password is "
-    "never typed into this chat. Send help any time to see everything I can do."
+    "never typed into this chat. Send help any time to see what I can do."
 )
 
 HELP_TEXT = (
     "*Just talk to me normally.*\n"
     "I'm a Gemini agent, not a command line - ask however you'd ask a "
     "classmate. Full sentences, short phrases, English or Kiswahili.\n\n"
-    "*Things to ask*\n"
+    "*Ask me things like*\n"
     "- what is <unit> about now\n"
     "- send me the assignment questions for <unit>\n"
     "- explain <topic> from our notes\n"
@@ -125,13 +118,12 @@ HELP_TEXT = (
     "- remind me on Friday 6pm to finish the lab\n\n"
     "Use any unit you take, by code or by name - I read your units from your "
     "own account, whatever course you're on.\n\n"
-    "*Ask out loud, or show me something*\n"
-    "Send voice and I'll give you a private page to record a question, "
-    "photograph a question paper or a slide, or upload a PDF. I'll read it and "
-    "answer.\n\n"
+    "*I answer from your lecturer's own files*\n"
+    "Slides, briefs and notes from your units - not from memory. I'll tell you "
+    "which file an answer came from.\n\n"
     "*Shortcuts, if you'd rather tap a number*\n"
     "1 link  2 my units  3 what's due  4 my progress\n"
-    "5 help  6 privacy  7 status  8 unlink  9 voice or photo\n\n"
+    "5 help  6 privacy  7 status  8 unlink\n\n"
     "Capitals don't matter. If something takes a few seconds I'll say so - "
     "send more and it'll be waiting.\n\n"
     "I fetch and explain. I never submit coursework, sit a quiz or touch a "
@@ -146,8 +138,6 @@ PRIVACY_TEXT = (
     "access again without being able to read your number back out.\n"
     "- Your access token: held for this service only, and deleted the moment "
     "you send unlink.\n"
-    "- Voice notes and photos: read in memory to answer you, never written to "
-    "disk or kept. Upload links are yours alone and expire.\n"
     "- This chat: WhatsApp keeps your message history, which is exactly why "
     "your password never goes in here.\n"
     "- Your coursework: read only. Submitting, uploading, attempting a quiz "
@@ -164,26 +154,6 @@ MORE_WORDS = {"more", "next", "continue", "go on", "?"}
 PRIVACY_WORDS = {"privacy", "is it safe", "safety", "what do you store", "security"}
 STATUS_WORDS = {"status", "am i linked", "linked"}
 
-# Ways a student asks to send something rather than type it. All of these mint
-# an upload page, because Twilio will not release inbound media on this account.
-UPLOAD_WORDS = {
-    "voice",
-    "voice note",
-    "record",
-    "audio",
-    "photo",
-    "picture",
-    "image",
-    "upload",
-    "file",
-    "pdf",
-    "send a photo",
-    "send a voice note",
-    "send a file",
-    "send a pdf",
-    "scan",
-}
-
 # Numbered shortcuts. Everything here is also reachable in plain language - the
 # numbers exist for speed and for anyone who does not want to type, never as the
 # only way in.
@@ -196,7 +166,6 @@ NUMBER_SHORTCUTS = {
     "6": "privacy",
     "7": "status",
     "8": "unlink",
-    "9": "voice",
 }
 
 STILL_WORKING = (
@@ -204,11 +173,14 @@ STILL_WORKING = (
     "unit material.\n\nSend: more"
 )
 
-MEDIA_WORKING = {
-    "voice": "Listening to your voice note now - a few seconds.\n\nSend: more",
-    "image": "Reading your photo now - a few seconds.\n\nSend: more",
-    "document": "Reading that file now - a few seconds.\n\nSend: more",
-}
+# An attachment cannot be fetched on this plan (see module docs). Decline it in
+# one line, and point at the thing that works better anyway.
+ATTACHMENT_TEXT = (
+    "I can't open attachments in this chat - the messaging provider doesn't "
+    "release them on this number's plan.\n\n"
+    "Type your question instead, or tell me the unit and I'll pull the real "
+    "brief or slides from your account - usually better than a photo of them."
+)
 
 
 def _normalise(body: str) -> str:
@@ -309,8 +281,8 @@ def _unlink_text(sender: str) -> str:
 def _status_text(sender: str) -> str:
     if _is_linked(sender):
         return (
-            "You're linked. Ask me anything about your units - or send voice to "
-            "ask out loud or photograph a question.\n\n"
+            "You're linked. Ask me anything about your units - what a topic "
+            "covers, what's due, what an assignment wants.\n\n"
             "Send unlink to delete my access at any time."
         )
     return "You're not linked yet. Send 'link' and sign in on the one-time page."
@@ -327,8 +299,6 @@ def _fast_text(sender: str, body: str) -> str | None:
         return _link_text(sender)
     if lowered in UNLINK_WORDS:
         return _unlink_text(sender)
-    if lowered in UPLOAD_WORDS:
-        return upload_link_for(sender)
     if lowered in PRIVACY_WORDS:
         return PRIVACY_TEXT
     if lowered in STATUS_WORDS:
@@ -341,26 +311,8 @@ def _fast_text(sender: str, body: str) -> str | None:
             "secure page instead."
         )
     if not body.strip():
-        return "Send me a question - or send voice to ask out loud."
+        return "Send me a question - anything about your units."
     return None
-
-
-def _media_invite(sender: str, kind: str | None) -> str:
-    """Explains why the attachment could not be opened, and offers the way in.
-
-    Twilio does not release inbound media on a trial account (20003), so the
-    bytes the student just sent are genuinely unreachable. Saying so plainly and
-    handing over a working alternative beats a vague failure.
-    """
-    noun = {
-        "voice": "voice notes",
-        "image": "photos",
-        "document": "files",
-    }.get(kind or "", "attachments")
-    return (
-        f"I can read {noun} - but WhatsApp attachments can't reach me on this "
-        "number's plan.\n\n" + upload_link_for(sender)
-    )
 
 
 def _failure_text(exc: BaseException) -> str:
@@ -412,40 +364,6 @@ async def _race(sender: str, label: str, work: Awaitable[str]) -> str | None:
     task.add_done_callback(_stash)
     logger.info("work for %s exceeded the twiml budget; queued", sender)
     return None
-
-
-async def _media_answer(
-    sender: str, caption: str, url: str, content_type: str
-) -> str:
-    """Reads Twilio-hosted media, then answers it as a question.
-
-    Only reachable with TWILIO_MEDIA_FETCH=1 on a paid account. The fetch and
-    the model call are blocking, so they run in a worker thread: one student's
-    voice note must not stall everyone else's turns.
-    """
-    result = await asyncio.to_thread(intake.read_media, url, content_type)
-    status = result.get("status")
-    kind = result.get("kind") or "document"
-
-    if status == "unsupported":
-        return (
-            "I can read voice notes, photos, and PDF or text files. That format "
-            "I can't - send it as a photo, or type your question."
-        )
-    if status == "empty":
-        if kind == "voice":
-            return (
-                "I couldn't hear anything in that voice note. Try again "
-                "somewhere quieter, or type your question."
-            )
-        return "I couldn't read anything in that. Try a clearer photo or file."
-    if status != "success":
-        logger.warning("media intake failed: %s", result.get("error_message"))
-        return _media_invite(sender, kind)
-
-    question, prefix = intake.question_for(kind, result.get("text", ""), caption)
-    answer = await run_turn(sender, question)
-    return prefix + answer
 
 
 async def _agent_text(sender: str, body: str) -> str | None:
@@ -532,8 +450,7 @@ def _health() -> dict:
         "telegram_configured": telegram.configured(),
         "whatsapp_reply_mode": "twiml",
         "reply_budget_seconds": TWIML_BUDGET_SECONDS,
-        "media_intake": ["voice", "image", "document"],
-        "media_source": "twilio" if intake.TWILIO_MEDIA_FETCH else "upload_page",
+        "inbound": "text",
     }
 
 
@@ -572,14 +489,12 @@ async def whatsapp_webhook(
         num_media = int(form.get("NumMedia", "0") or 0)
     except ValueError:
         num_media = 0
-    media_url = form.get("MediaUrl0", "")
-    media_type = form.get("MediaContentType0", "")
 
     logger.info(
         "inbound whatsapp from %s: %s%s",
         sender,
         body[:200],
-        f" [+{num_media} media: {media_type}]" if num_media else "",
+        f" [+{num_media} media: {form.get('MediaContentType0', '')}]" if num_media else "",
     )
 
     if not sender:
@@ -608,18 +523,9 @@ async def whatsapp_webhook(
     lead = outbox.pop(sender, 1)
 
     if num_media:
-        kind = intake.kind_of(media_type)
-        if intake.TWILIO_MEDIA_FETCH and media_url:
-            answer = await _race(
-                sender,
-                intake.LABELS.get(kind or "", "your file"),
-                _media_answer(sender, body, media_url, media_type),
-            )
-            text = MEDIA_WORKING.get(kind or "", STILL_WORKING) if answer is None else answer
-        else:
-            # The bytes are unreachable on this plan; offer the page instead.
-            text = _media_invite(sender, kind)
-        return _twiml(lead + _render(sender, text, MAX_TWIML_MESSAGES - len(lead)))
+        return _twiml(
+            lead + _render(sender, ATTACHMENT_TEXT, MAX_TWIML_MESSAGES - len(lead))
+        )
 
     # Numbered menu shortcuts become the plain-language request they describe.
     resolved = NUMBER_SHORTCUTS.get(lowered, body)
