@@ -12,18 +12,22 @@ subject to that restriction. WhatsApp therefore answers inline, in the HTTP
 response to the inbound webhook.
 
 The cost of that is real and worth naming: the reply has to be ready before
-Twilio's webhook window closes. So an agent turn is raced against a budget. If
-it wins, the student gets the answer immediately. If it loses, we ack, let the
-task finish in the background, and stash the result - the student pulls it with
+Twilio's webhook window closes. So the work is raced against a budget. If it
+wins, the student gets the answer immediately. If it loses, we ack, let the task
+finish in the background, and stash the result - the student pulls it with
 `more`. Nothing is lost, nothing hangs.
 
-A queued answer is labelled with the question that produced it. Without that
-label a late answer arrives after the student has already asked something else,
-and reads as though the assistant ignored the question - which is exactly how
-it looked in testing.
+A queued answer is labelled with what produced it. Without that label a late
+answer arrives after the student has already asked something else, and reads as
+though the assistant ignored the question - which is exactly how it looked in
+testing.
 
-Telegram has no such restriction, so it keeps the cleaner ack-now/reply-later
-API path.
+Three kinds of question
+-----------------------
+Text, voice note, and photo/document. Media is read by Gemini in server/intake.py
+and then answered by the same agent, so the microphone and the camera are
+first-class inputs rather than an afterthought - on WhatsApp they are how people
+actually communicate.
 
 Routes
 ------
@@ -48,6 +52,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from typing import Awaitable
 from xml.sax.saxutils import escape as xml_escape
 
 from fastapi import BackgroundTasks, FastAPI, Form, Request, Response
@@ -59,7 +64,7 @@ from browser_agent.config import (
     TWILIO_VALIDATE_SIGNATURE,
 )
 from server import format as fmt
-from server import telegram, whatsapp
+from server import intake, telegram, whatsapp
 from server.link import router as link_router
 from server.media import router as media_router
 from server.runner import run_turn
@@ -86,46 +91,47 @@ MAX_TWIML_MESSAGES = 3
 # In-memory is correct here: the service runs single-instance by design.
 _PENDING: dict[str, list[str]] = {}
 
-# The question each sender is currently waiting on, so 'more' can say what it
-# is still working on instead of claiming nothing is queued.
+# What each sender is currently waiting on, so 'more' can say what is still
+# running instead of claiming nothing is queued.
 _INFLIGHT: dict[str, str] = {}
 
 WELCOME_TEXT = (
     "Hi - I'm your study assistant, here on WhatsApp.\n\n"
-    "I read your own e-learning account and answer questions about your "
-    "units: what a topic covers, what the notes say, what an assignment "
-    "actually asks for, and what is due.\n\n"
-    "Start by sending: 1\n"
-    "(or just the word: link)\n\n"
+    "I read your own e-learning account and answer in plain language: what a "
+    "topic covers, what the notes say, what an assignment actually asks for, "
+    "what is due.\n\n"
+    "*Talk to me normally.* Full sentences, your own words - or hold the mic "
+    "and just ask out loud.\n\n"
+    "To get started, send: link\n\n"
     "That opens a private one-time page where you sign in. Your password is "
-    "never typed into this chat.\n\n"
-    "Send 5 or 'help' any time for the full menu."
+    "never typed into this chat. Send help any time to see everything I can do."
 )
 
 HELP_TEXT = (
-    "*What I can do*\n"
-    "Reply with a number, or just ask in your own words.\n\n"
-    "1. link - connect your e-learning account\n"
-    "2. my units - list the units you are enrolled in\n"
-    "3. what's due - deadlines in the next two weeks\n"
-    "4. my progress - how far you are in each unit\n"
-    "5. help - this menu\n"
-    "6. privacy - what I store, and what I never touch\n"
-    "7. status - whether your account is linked\n"
-    "8. unlink - delete my access to your account\n\n"
-    "*Or ask in your own words*\n"
+    "*Just talk to me normally.*\n"
+    "I'm a Gemini agent, not a command line - ask however you'd ask a "
+    "classmate. Full sentences, short phrases, English or Kiswahili.\n\n"
+    "*You can also just send:*\n"
+    "- a voice note - ask out loud, I'll listen and answer\n"
+    "- a photo of a question, a slide or the whiteboard\n"
+    "- a PDF or document to read and explain\n\n"
+    "*Things to ask*\n"
     "- what is <unit> about now\n"
     "- send me the assignment questions for <unit>\n"
     "- explain <topic> from our notes\n"
     "- what notes are there for <unit>\n"
-    "- what's left to do in <unit>\n"
+    "- what have I not finished in <unit>\n"
+    "- what should I work on today\n"
     "- remind me on Friday 6pm to finish the lab\n\n"
-    "Replace <unit> with any unit you are taking - I read your units from "
-    "your own account, whatever course you are on.\n\n"
-    "Capitals don't matter. If an answer takes a moment, I'll say so and you "
-    "send: more\n\n"
+    "Use any unit you take, by code or by name - I read your units from your "
+    "own account, whatever course you're on.\n\n"
+    "*Shortcuts, if you'd rather tap a number*\n"
+    "1 link  2 my units  3 what's due  4 my progress\n"
+    "5 help  6 privacy  7 status  8 unlink\n\n"
+    "Capitals don't matter. If something takes a few seconds I'll say so - "
+    "send more and it'll be waiting.\n\n"
     "I fetch and explain. I never submit coursework, sit a quiz or touch a "
-    "grade - that is blocked in code, not just discouraged."
+    "grade - that's blocked in code, not just discouraged."
 )
 
 PRIVACY_TEXT = (
@@ -136,13 +142,15 @@ PRIVACY_TEXT = (
     "access again without being able to read your number back out.\n"
     "- Your access token: held for this service only, and deleted the moment "
     "you send unlink.\n"
+    "- Voice notes and photos: read in memory to answer you, never written to "
+    "disk or kept.\n"
     "- This chat: WhatsApp keeps your message history, which is exactly why "
     "your password never goes in here.\n"
     "- Your coursework: read only. Submitting, uploading, attempting a quiz "
     "and changing a grade are blocked in code.\n\n"
     "Nobody else's account is reachable from your chat, and yours is not "
     "reachable from theirs.\n\n"
-    "Send 8 or 'unlink' at any time."
+    "Send unlink at any time."
 )
 
 LINK_WORDS = {"link", "link me", "connect", "login", "log in", "sign in"}
@@ -152,9 +160,9 @@ MORE_WORDS = {"more", "next", "continue", "go on", "?"}
 PRIVACY_WORDS = {"privacy", "is it safe", "safety", "what do you store", "security"}
 STATUS_WORDS = {"status", "am i linked", "linked"}
 
-# Numbered shortcuts from the menu. Some are handled here, the rest are simply
-# rewritten into the plain-language question and sent through the agent, so the
-# numbers can never drift out of step with what the menu promises.
+# Numbered shortcuts. Everything here is also reachable in plain language - the
+# numbers exist for speed and for anyone who does not want to type, never as the
+# only way in.
 NUMBER_SHORTCUTS = {
     "1": "link",
     "2": "what are my units",
@@ -171,6 +179,18 @@ STILL_WORKING = (
     "unit material.\n\nSend: more"
 )
 
+MEDIA_WORKING = {
+    "voice": "Listening to your voice note now - a few seconds.\n\nSend: more",
+    "image": "Reading your photo now - a few seconds.\n\nSend: more",
+    "document": "Reading that file now - a few seconds.\n\nSend: more",
+}
+
+MEDIA_LABELS = {
+    "voice": "your voice note",
+    "image": "your photo",
+    "document": "your file",
+}
+
 
 def _normalise(body: str) -> str:
     """Lowercases and strips trailing punctuation for command matching.
@@ -180,8 +200,8 @@ def _normalise(body: str) -> str:
     return body.strip().lower().strip(" .!?,;:")
 
 
-def _short(question: str, limit: int = 60) -> str:
-    one_line = " ".join(question.split())
+def _short(text: str, limit: int = 60) -> str:
+    one_line = " ".join(text.split())
     return one_line if len(one_line) <= limit else one_line[: limit - 1] + "\u2026"
 
 
@@ -267,15 +287,16 @@ def _link_text(sender: str) -> str:
         f"It works once and expires in {minutes} minutes. Your password is "
         "exchanged for an access token on that page and is never saved, "
         "logged, or typed into this chat.\n\n"
-        "When it says you're linked, come back here and send: 2"
+        "When it says you're linked, come back and ask me anything - or send a "
+        "voice note."
     )
 
 
 def _unlink_text(sender: str) -> str:
     if moodle.forget_token(store.user_key_for(sender)):
         return (
-            "Done - your stored e-learning access has been deleted. Send 1 or "
-            "'link' if you want to connect again."
+            "Done - your stored e-learning access has been deleted. Send 'link' "
+            "if you want to connect again."
         )
     return "You weren't linked, so there was nothing to delete."
 
@@ -283,13 +304,11 @@ def _unlink_text(sender: str) -> str:
 def _status_text(sender: str) -> str:
     if _is_linked(sender):
         return (
-            "You're linked. Try 2 for your units, or 3 for what's due.\n\n"
-            "Send 8 to delete my access at any time."
+            "You're linked. Ask me anything about your units - or send a voice "
+            "note or a photo of a question.\n\n"
+            "Send unlink to delete my access at any time."
         )
-    return (
-        "You're not linked yet. Send 1 (or 'link') and sign in on the "
-        "one-time page."
-    )
+    return "You're not linked yet. Send 'link' and sign in on the one-time page."
 
 
 def _fast_text(sender: str, body: str) -> str | None:
@@ -311,11 +330,11 @@ def _fast_text(sender: str, body: str) -> str | None:
     if "password" in lowered and (":" in body or "=" in body):
         return (
             "Don't send passwords here - this chat is stored on your phone and "
-            "by the messaging provider. Send 1 and type it once on the secure "
-            "page instead."
+            "by the messaging provider. Send 'link' and type it once on the "
+            "secure page instead."
         )
     if not body.strip():
-        return "Send me a text instruction (media isn't supported yet)."
+        return "Send me a question - typed, spoken, or a photo."
     return None
 
 
@@ -331,20 +350,20 @@ def _failure_text(exc: BaseException) -> str:
 # --------------------------------------------------------------------------- #
 
 
-async def _agent_text(sender: str, body: str) -> str | None:
-    """Races an agent turn against the webhook budget.
+async def _race(sender: str, label: str, work: Awaitable[str]) -> str | None:
+    """Races one unit of work against the webhook budget.
 
     Returns the answer if it finished in time. Otherwise returns None and lets
     the task keep running, stashing its labelled result for the next 'more'.
     """
-    task = asyncio.create_task(run_turn(sender, body))
+    task = asyncio.create_task(work)
     done, _pending = await asyncio.wait({task}, timeout=TWIML_BUDGET_SECONDS)
 
     if task in done:
         try:
             return task.result()
         except Exception as exc:
-            logger.exception("agent turn failed")
+            logger.exception("turn failed")
             return _failure_text(exc)
 
     def _stash(finished: asyncio.Task) -> None:
@@ -352,18 +371,79 @@ async def _agent_text(sender: str, body: str) -> str | None:
         try:
             text = finished.result()
         except Exception as exc:  # noqa: BLE001 - reported to the student
-            logger.exception("agent turn failed after the webhook returned")
+            logger.exception("turn failed after the webhook returned")
             text = _failure_text(exc)
         # Label it: by the time this is collected the student may have asked
         # something else, and an unlabelled answer looks like a non-answer.
-        labelled = f'*You asked:* "{_short(body)}"\n\n{text}'
-        _PENDING.setdefault(sender, []).extend(whatsapp.chunk(fmt.for_chat(labelled)))
+        _PENDING.setdefault(sender, []).extend(
+            whatsapp.chunk(fmt.for_chat(f"*Re:* {label}\n\n{text}"))
+        )
         logger.info("queued a late answer for %s", sender)
 
-    _INFLIGHT[sender] = body
+    _INFLIGHT[sender] = label
     task.add_done_callback(_stash)
-    logger.info("turn for %s exceeded the twiml budget; queued", sender)
+    logger.info("work for %s exceeded the twiml budget; queued", sender)
     return None
+
+
+async def _media_answer(
+    sender: str, caption: str, url: str, content_type: str
+) -> str:
+    """Reads inbound media with Gemini, then answers it as a question.
+
+    The fetch and the model call are blocking, so they run in a worker thread:
+    one student's voice note must not stall everyone else's turns.
+    """
+    result = await asyncio.to_thread(intake.read_media, url, content_type)
+    status = result.get("status")
+    kind = result.get("kind") or "document"
+
+    if status == "unsupported":
+        return (
+            "I can read voice notes, photos, and PDF or text files. That format "
+            "I can't - send it as a photo, or type your question."
+        )
+    if status == "empty":
+        if kind == "voice":
+            return (
+                "I couldn't hear anything in that voice note. Try again "
+                "somewhere quieter, or type your question."
+            )
+        return "I couldn't read anything in that. Try a clearer photo or file."
+    if status != "success":
+        logger.warning("media intake failed: %s", result.get("error_message"))
+        return (
+            "I couldn't open that one. Send it again, or type your question "
+            "instead."
+        )
+
+    extracted = result.get("text", "").strip()
+    caption = (caption or "").strip()
+
+    if kind == "voice":
+        # The transcript IS the question. Echo it: answering a misheard
+        # question without showing what was heard is deeply confusing.
+        question = f"{extracted}\n\n{caption}".strip() if caption else extracted
+        prefix = f'\U0001f399 *Heard:* "{_short(extracted, 140)}"\n\n'
+    else:
+        noun = "photo" if kind == "image" else "file"
+        question = (
+            f"The student sent a {noun}. This is what it contains:\n\n"
+            f"{extracted}\n\n"
+            + (f"Their message with it: {caption}\n\n" if caption else "")
+            + "Answer them about it, grounded in their own unit material where "
+            "that is relevant. If it is coursework, explain how to approach it "
+            "and what the question is really asking - never write the "
+            "submission for them."
+        )
+        prefix = ""
+
+    answer = await run_turn(sender, question)
+    return prefix + answer
+
+
+async def _agent_text(sender: str, body: str) -> str | None:
+    return await _race(sender, f'"{_short(body)}"', run_turn(sender, body))
 
 
 # --------------------------------------------------------------------------- #
@@ -446,6 +526,7 @@ def _health() -> dict:
         "telegram_configured": telegram.configured(),
         "whatsapp_reply_mode": "twiml",
         "reply_budget_seconds": TWIML_BUDGET_SECONDS,
+        "media_intake": ["voice", "image", "document"],
     }
 
 
@@ -479,14 +560,27 @@ async def whatsapp_webhook(
 
     sender = From or form.get("From", "")
     body = (Body or form.get("Body", "")).strip()
-    logger.info("inbound whatsapp from %s: %s", sender, body[:200])
+
+    try:
+        num_media = int(form.get("NumMedia", "0") or 0)
+    except ValueError:
+        num_media = 0
+    media_url = form.get("MediaUrl0", "")
+    media_type = form.get("MediaContentType0", "")
+
+    logger.info(
+        "inbound whatsapp from %s: %s%s",
+        sender,
+        body[:200],
+        f" [+{num_media} media: {media_type}]" if num_media else "",
+    )
 
     if not sender:
         return _twiml([])
 
     lowered = _normalise(body)
 
-    if lowered in MORE_WORDS:
+    if not num_media and lowered in MORE_WORDS:
         queued = _pop_pending(sender)
         if queued:
             return _twiml(queued)
@@ -494,20 +588,31 @@ async def whatsapp_webhook(
         if waiting:
             return _twiml_text(
                 sender,
-                f'Still working on "{_short(waiting)}" - give it a few more '
-                "seconds, then send: more",
+                f"Still working on {waiting} - give it a few more seconds, "
+                "then send: more",
             )
         return _twiml_text(
-            sender, "Nothing waiting. Ask me something, or send 5 for the menu."
+            sender, "Nothing waiting. Ask me anything, or send help for ideas."
         )
-
-    # Numbered menu shortcuts become the plain-language request they describe.
-    resolved = NUMBER_SHORTCUTS.get(lowered, body)
 
     # Hand over any answer that finished after the last reply, before answering
     # this one - otherwise it surfaces later, out of order, looking like a
     # reply to the wrong question.
     lead = _pop_pending(sender, limit=1)
+
+    # A voice note, photo or document is a question like any other.
+    if num_media and media_url:
+        kind = intake.kind_of(media_type) or "document"
+        answer = await _race(
+            sender,
+            MEDIA_LABELS.get(kind, "your file"),
+            _media_answer(sender, body, media_url, media_type),
+        )
+        text = MEDIA_WORKING.get(kind, STILL_WORKING) if answer is None else answer
+        return _twiml(lead + _render(sender, text, MAX_TWIML_MESSAGES - len(lead)))
+
+    # Numbered menu shortcuts become the plain-language request they describe.
+    resolved = NUMBER_SHORTCUTS.get(lowered, body)
 
     fast = _fast_text(sender, resolved)
     if fast is not None:
