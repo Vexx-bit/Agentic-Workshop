@@ -1,31 +1,34 @@
-"""Read WhatsApp media as a question: voice notes, photos, documents.
+"""Read media as a question: voice notes, photos, documents.
 
 WhatsApp's native inputs are the microphone and the camera. A student at 11pm
 does not type a well-formed English sentence - they hold the mic button, or they
-photograph the question. Ignoring that would waste both the most WhatsApp-native
-thing about the product and the most Gemini-native thing about the model.
-
-So inbound media is handed to Gemini directly:
+photograph the question. So media is handed to Gemini directly:
 
     voice note  -> transcript, used as the student's question
     photo       -> text and diagrams read out of the image
     document    -> the file's contents, read and explained
 
-Fetching that media is the fiddly part, and it is worth spelling out because it
-silently broke twice. Twilio's MediaUrl0 lives on api.twilio.com and requires
-the account credentials as HTTP basic auth. It then answers 307 with a Location
-pointing at a PRE-SIGNED CDN URL. That signed URL must be fetched WITHOUT
-credentials: the signature is already the authorisation, and sending an
-Authorization header alongside it is two auth mechanisms for one request, which
-is rejected. An HTTP client set to follow redirects automatically carries the
-header across and fails. So the hops are walked by hand below.
+Where the bytes come from
+-------------------------
+Not from Twilio, on this account. Fetching MediaUrl0 answers:
 
-Bytes go to the model in memory. Nothing is written to disk and no media URL is
-passed to the model, so a student's photo does not outlive the request.
+    {"code":20003,"message":"This feature is not available on a Trial account"}
 
-The transcript is always echoed back to the student. Speech recognition is
-fallible, and a wrong answer to a misheard question is far more confusing than a
-visible "this is what I heard".
+while the identical credentials read Messages.json fine and the secret's digest
+matches the console token exactly - so the earlier 401 was never a credential
+bug, and no code change can fix it. Inbound media therefore arrives through
+server/upload.py instead, where the student uploads straight to this service and
+Twilio is not involved.
+
+read_media() is kept for a Twilio URL in case the account is ever upgraded, and
+is off by default. read_bytes() is the path that actually runs.
+
+Bytes are read in memory. Nothing is written to disk and no media URL is passed
+to the model, so a student's photo does not outlive the request.
+
+The transcript is always echoed back. Speech recognition is fallible, and a
+wrong answer to a misheard question is far more confusing than a visible "this
+is what I heard".
 """
 
 from __future__ import annotations
@@ -45,10 +48,13 @@ from browser_agent.config import (
 
 logger = logging.getLogger(__name__)
 
-# WhatsApp caps media around 16MB; stay under it and fail politely if not.
 MAX_MEDIA_BYTES = int(os.getenv("MAX_MEDIA_BYTES", str(12 * 1024 * 1024)))
 HTTP_TIMEOUT = float(os.getenv("MEDIA_HTTP_TIMEOUT", "30"))
 MAX_REDIRECTS = 4
+
+# Twilio media retrieval is a paid-account feature. Left off so the code does
+# not repeatedly walk into a 20003; flip it if the account is upgraded.
+TWILIO_MEDIA_FETCH = os.getenv("TWILIO_MEDIA_FETCH", "0").strip() in ("1", "true", "True")
 
 _DOCUMENT_TYPES = {
     "application/pdf",
@@ -56,8 +62,18 @@ _DOCUMENT_TYPES = {
     "text/csv",
 }
 
+# Browsers hand back webm or mp4 from a phone's mic; WhatsApp used ogg. All are
+# audio as far as the model is concerned.
+_VOICE_TYPES = {"video/3gpp", "video/webm", "video/mp4", "video/quicktime"}
+
+LABELS = {
+    "voice": "your voice note",
+    "image": "your photo",
+    "document": "your file",
+}
+
 _TRANSCRIBE_PROMPT = (
-    "Transcribe this voice note exactly as spoken. It is a university student "
+    "Transcribe this recording exactly as spoken. It is a university student "
     "asking their study assistant a question, often in English mixed with "
     "Kiswahili or local slang, sometimes with background noise.\n\n"
     "Rules:\n"
@@ -91,13 +107,22 @@ _DOCUMENT_PROMPT = (
     "- If nothing can be read, return exactly: NOT_READABLE"
 )
 
+_PROMPTS = {
+    "voice": _TRANSCRIBE_PROMPT,
+    "image": _IMAGE_PROMPT,
+    "document": _DOCUMENT_PROMPT,
+}
+
+
+def shorten(text: str, limit: int = 140) -> str:
+    one_line = " ".join((text or "").split())
+    return one_line if len(one_line) <= limit else one_line[: limit - 1] + "\u2026"
+
 
 def kind_of(content_type: str) -> str | None:
     """Maps a MIME type to one of: voice, image, document. None if unsupported."""
     mime = (content_type or "").split(";")[0].strip().lower()
-    if mime.startswith("audio/") or mime == "video/3gpp":
-        # WhatsApp voice notes arrive as audio/ogg; some Android builds send
-        # a 3gpp container for the same mic button.
+    if mime.startswith("audio/") or mime in _VOICE_TYPES:
         return "voice"
     if mime.startswith("image/"):
         return "image"
@@ -106,14 +131,36 @@ def kind_of(content_type: str) -> str | None:
     return None
 
 
-def _credential_fingerprint() -> str:
-    """Identifies the credentials in memory without disclosing them.
+def question_for(kind: str, extracted: str, note: str = "") -> tuple[str, str]:
+    """Turns extracted media into (question for the agent, prefix for the reply).
 
-    Exists because a 401 here is ambiguous: either the process holds the wrong
-    bytes, or the right bytes are being refused. Secret Manager cannot answer
-    that - only the running process can. The token is never logged, just the
-    length and a short digest that can be compared against a known-good pair.
+    Shared by the webhook and the upload page on purpose: these two paths
+    answering the same voice note differently would be a bug nobody would spot
+    until a demo.
     """
+    extracted = (extracted or "").strip()
+    note = (note or "").strip()
+
+    if kind == "voice":
+        # The transcript IS the question. Echo it, because answering a misheard
+        # question without showing what was heard is deeply confusing.
+        question = f"{extracted}\n\n{note}".strip() if note else extracted
+        return question, f'\U0001f399 *Heard:* "{shorten(extracted)}"\n\n'
+
+    noun = "photo" if kind == "image" else "file"
+    question = (
+        f"The student sent a {noun}. This is what it contains:\n\n"
+        f"{extracted}\n\n"
+        + (f"Their message with it: {note}\n\n" if note else "")
+        + "Answer them about it, grounded in their own unit material where that "
+        "is relevant. If it is coursework, explain how to approach it and what "
+        "the question is really asking - never write the submission for them."
+    )
+    return question, ""
+
+
+def _credential_fingerprint() -> str:
+    """Identifies the credentials in memory without disclosing them."""
     sid = TWILIO_ACCOUNT_SID
     token = TWILIO_AUTH_TOKEN
     digest = hashlib.sha256(token.encode("utf-8")).hexdigest()[:8] if token else "-"
@@ -135,8 +182,6 @@ def _fetch(url: str) -> tuple[bytes, str]:
         logger.info("media hop 0: HTTP %s", response.status_code)
 
         if response.status_code in (401, 403):
-            # Say what we authenticated AS, or the next person debugging this
-            # is back to comparing Secret Manager against a laptop.
             logger.error("media auth rejected: %s", _credential_fingerprint())
 
         hops = 0
@@ -145,50 +190,32 @@ def _fetch(url: str) -> tuple[bytes, str]:
             if not location:
                 break
             target = urljoin(str(response.url), location)
-            # No auth from here on: the URL carries its own signature.
-            response = client.get(target)
+            response = client.get(target)  # signed URL: no auth
             hops += 1
             logger.info("media hop %d: HTTP %s", hops, response.status_code)
 
         if response.status_code >= 400:
             raise RuntimeError(f"media fetch returned HTTP {response.status_code}")
 
-        content_type = response.headers.get("content-type", "")
-        logger.info(
-            "media fetched: %d bytes, content-type %r", len(response.content), content_type
-        )
-        return response.content, content_type
+        return response.content, response.headers.get("content-type", "")
 
 
-def read_media(url: str, content_type: str) -> dict:
-    """Reads one inbound media item with Gemini.
+def read_bytes(data: bytes, content_type: str) -> dict:
+    """Reads media we already hold, with Gemini.
 
-    Blocking on purpose: called from the event loop with asyncio.to_thread, so
-    the HTTP fetch and the model call cannot stall other students' turns.
+    Blocking on purpose: called with asyncio.to_thread so one student's upload
+    cannot stall everyone else's turns.
 
-    Returns a dict with status "success" plus `kind` and `text`, or status
-    "unsupported" / "empty" / "error" with an error_message.
+    Returns status "success" with `kind` and `text`, or "unsupported" / "empty"
+    / "error" with an error_message.
     """
     kind = kind_of(content_type)
     if kind is None:
-        logger.warning("unsupported inbound media type %r", content_type)
+        logger.warning("unsupported media type %r", content_type)
         return {
             "status": "unsupported",
             "error_message": f"unsupported media type: {content_type!r}",
         }
-
-    if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN:
-        return {
-            "status": "error",
-            "kind": kind,
-            "error_message": "twilio credentials are not configured",
-        }
-
-    try:
-        data, served_type = _fetch(url)
-    except Exception as exc:
-        logger.exception("failed to download inbound media")
-        return {"status": "error", "kind": kind, "error_message": str(exc)}
 
     if not data:
         return {"status": "empty", "kind": kind, "error_message": "empty file"}
@@ -202,17 +229,7 @@ def read_media(url: str, content_type: str) -> dict:
             ),
         }
 
-    # Prefer the type Twilio actually served, but ignore a generic
-    # octet-stream: the model needs a real media type to decode.
-    served = (served_type or "").split(";")[0].strip().lower()
-    announced = (content_type or "").split(";")[0].strip().lower()
-    mime = served if served and served != "application/octet-stream" else announced
-
-    prompt = {
-        "voice": _TRANSCRIBE_PROMPT,
-        "image": _IMAGE_PROMPT,
-        "document": _DOCUMENT_PROMPT,
-    }[kind]
+    mime = (content_type or "").split(";")[0].strip().lower()
 
     try:
         from google import genai
@@ -223,21 +240,47 @@ def read_media(url: str, content_type: str) -> dict:
             model=VISION_MODEL,
             contents=[
                 types.Part.from_bytes(data=data, mime_type=mime),
-                prompt,
+                _PROMPTS[kind],
             ],
         )
         text = (response.text or "").strip()
     except Exception as exc:
-        logger.exception("gemini could not read inbound %s (%s)", kind, mime)
+        logger.exception("gemini could not read %s (%s)", kind, mime)
         return {"status": "error", "kind": kind, "error_message": str(exc)}
 
     if not text or text in {"NO_SPEECH", "NOT_READABLE"}:
-        logger.info("inbound %s had nothing readable", kind)
+        logger.info("%s had nothing readable", kind)
         return {
             "status": "empty",
             "kind": kind,
             "error_message": "nothing readable in the media",
         }
 
-    logger.info("read inbound %s: %d bytes, %s, %d chars", kind, len(data), mime, len(text))
+    logger.info("read %s: %d bytes, %s, %d chars", kind, len(data), mime, len(text))
     return {"status": "success", "kind": kind, "text": text, "bytes": len(data)}
+
+
+def read_media(url: str, content_type: str) -> dict:
+    """Reads media hosted by Twilio. Requires a paid account (see module docs)."""
+    if not TWILIO_MEDIA_FETCH:
+        return {
+            "status": "error",
+            "kind": kind_of(content_type),
+            "error_message": "twilio media retrieval is disabled (trial account)",
+        }
+    if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN:
+        return {
+            "status": "error",
+            "kind": kind_of(content_type),
+            "error_message": "twilio credentials are not configured",
+        }
+    try:
+        data, served_type = _fetch(url)
+    except Exception as exc:
+        logger.exception("failed to download inbound media")
+        return {"status": "error", "kind": kind_of(content_type), "error_message": str(exc)}
+
+    served = (served_type or "").split(";")[0].strip().lower()
+    # Ignore a generic octet-stream: the model needs a real media type.
+    mime = served if served and served != "application/octet-stream" else content_type
+    return read_bytes(data, mime)
