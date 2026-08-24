@@ -10,6 +10,11 @@ No app to install. No commands to memorise. You type the way you talk.
 Built for the Agentic AI Workshop hackathon on **Google ADK + Gemini**, running
 on **Cloud Run**, reachable through **Twilio WhatsApp**.
 
+
+
+https://github.com/user-attachments/assets/a0d9b5a2-a33c-4152-a0e9-2837614b9aea
+
+
 **Live documentation and onboarding page:**
 [agentic-workshop-ten.vercel.app](https://agentic-workshop-ten.vercel.app/)
 That page is what a student is given. This file is what an engineer is given.
