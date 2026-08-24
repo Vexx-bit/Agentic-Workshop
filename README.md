@@ -5,7 +5,7 @@ account inside WhatsApp. Ask what a topic is about, get the real assignment
 questions, pull down this week's slides, get quizzed on them, tick off an
 activity, plan your day.
 
-<video src="https://github.com/Vexx-bit/Agentic-Workshop/raw/main/0824.mp4" width="100%" controls></video>
+https://github.com/Vexx-bit/Agentic-Workshop/raw/main/0824.mp4
 
 No app to install. No commands to memorise. You type the way you talk.
 
