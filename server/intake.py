@@ -12,8 +12,8 @@ So inbound media is handed to Gemini directly:
     document    -> the file's contents, read and explained
 
 Fetching that media is the fiddly part, and it is worth spelling out because it
-silently broke once. Twilio's MediaUrl0 lives on api.twilio.com and requires the
-account credentials as HTTP basic auth. It then answers 307 with a Location
+silently broke twice. Twilio's MediaUrl0 lives on api.twilio.com and requires
+the account credentials as HTTP basic auth. It then answers 307 with a Location
 pointing at a PRE-SIGNED CDN URL. That signed URL must be fetched WITHOUT
 credentials: the signature is already the authorisation, and sending an
 Authorization header alongside it is two auth mechanisms for one request, which
@@ -30,6 +30,7 @@ visible "this is what I heard".
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 from urllib.parse import urljoin
@@ -105,6 +106,23 @@ def kind_of(content_type: str) -> str | None:
     return None
 
 
+def _credential_fingerprint() -> str:
+    """Identifies the credentials in memory without disclosing them.
+
+    Exists because a 401 here is ambiguous: either the process holds the wrong
+    bytes, or the right bytes are being refused. Secret Manager cannot answer
+    that - only the running process can. The token is never logged, just the
+    length and a short digest that can be compared against a known-good pair.
+    """
+    sid = TWILIO_ACCOUNT_SID
+    token = TWILIO_AUTH_TOKEN
+    digest = hashlib.sha256(token.encode("utf-8")).hexdigest()[:8] if token else "-"
+    return (
+        f"sid_prefix={sid[:2]!r} sid_len={len(sid)} sid_tail={sid[-4:]!r} "
+        f"token_len={len(token)} token_sha8={digest}"
+    )
+
+
 def _fetch(url: str) -> tuple[bytes, str]:
     """Downloads Twilio-hosted media, authenticating the first hop only.
 
@@ -115,6 +133,11 @@ def _fetch(url: str) -> tuple[bytes, str]:
     with httpx.Client(timeout=HTTP_TIMEOUT, follow_redirects=False) as client:
         response = client.get(url, auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN))
         logger.info("media hop 0: HTTP %s", response.status_code)
+
+        if response.status_code in (401, 403):
+            # Say what we authenticated AS, or the next person debugging this
+            # is back to comparing Secret Manager against a laptop.
+            logger.error("media auth rejected: %s", _credential_fingerprint())
 
         hops = 0
         while response.is_redirect and hops < MAX_REDIRECTS:
