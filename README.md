@@ -13,7 +13,7 @@ on **Cloud Run**, reachable through **Twilio WhatsApp**.
 
 
 https://github.com/user-attachments/assets/a0d9b5a2-a33c-4152-a0e9-2837614b9aea
-
+AND MORE.... :O
 
 **Live documentation and onboarding page:**
 [agentic-workshop-ten.vercel.app](https://agentic-workshop-ten.vercel.app/)
