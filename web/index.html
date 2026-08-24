@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Study assistant on WhatsApp</title>
-<meta name="description" content="Ask your e-learning account anything over WhatsApp - type it, say it, or photograph it. Built with Gemini and the Agent Development Kit." />
+<meta name="description" content="Ask your e-learning account anything over WhatsApp, in your own words. Answers come from your lecturer's own files. Built with Gemini and the Agent Development Kit." />
 <style>
   :root {
     --bg: #0b0d0c;
@@ -118,7 +118,7 @@
 
 <header><div class="wrap">
   <h1>Your coursework, over WhatsApp.</h1>
-  <p class="lede">Ask what a topic covers, what an assignment actually wants, or what is due &mdash; in <b>your own words</b>. Type it, say it, or photograph it. Answers come from <b>your lecturer's own files</b>, not from the internet.</p>
+  <p class="lede">Ask what a topic covers, what an assignment actually wants, or what is due &mdash; in <b>your own words</b>. Answers come from <b>your lecturer's own files</b>, not from the internet.</p>
   <div class="cta">
     <a class="btn" id="open-chat" href="#start">Open in WhatsApp</a>
     <button class="ghost" id="copy-code" type="button">First message: <code id="join-code"></code></button>
@@ -144,23 +144,23 @@
 </div></section>
 
 <section id="send"><div class="wrap">
-  <h2>Four ways to ask</h2>
+  <h2>How to ask</h2>
   <div class="grid two">
     <div class="cell">
-      <h3>Type it</h3>
-      <p>Full sentences, half sentences, typos, English or Kiswahili. There is no syntax to get wrong.</p>
+      <h3>Just type it</h3>
+      <p>Full sentences, half sentences, typos, English or Kiswahili. There is no syntax to get wrong, and no such thing as an invalid command.</p>
     </div>
     <div class="cell">
-      <h3>Say it</h3>
-      <p>Hold the mic and ask out loud. The voice note is transcribed, repeated back so you can see it heard you right, then answered.</p>
+      <h3>Keep talking</h3>
+      <p>Follow-ups work. Ask about a unit, then say &ldquo;what about the second question&rdquo; &mdash; it keeps the thread of the conversation.</p>
     </div>
     <div class="cell">
-      <h3>Photograph it</h3>
-      <p>Snap a question, a slide or the whiteboard. Text and diagrams are read out of the image and explained against your own notes.</p>
+      <h3>Get the real file</h3>
+      <p>Ask for the brief or the slides and a download link comes back, alongside the deadline and the file format the lecturer requires.</p>
     </div>
     <div class="cell">
-      <h3>Forward a file</h3>
-      <p>Send a PDF and get it read back in plain language &mdash; what it asks, what format it wants, when it is due.</p>
+      <h3>Or tap a number</h3>
+      <p>Eight shortcuts for the things everyone asks. A convenience for one-handed moments, never the only way in.</p>
     </div>
   </div>
 </div></section>
@@ -226,8 +226,8 @@
     <dt>Your number is stored as a one-way hash</dt>
     <dd>Enough to find your access again, not enough to read your number back out.</dd>
 
-    <dt>Voice notes and photos are not kept</dt>
-    <dd>They are read in memory to answer you, never written to disk.</dd>
+    <dt>Your questions are not archived</dt>
+    <dd>The conversation lives in memory to keep context, and goes when the service restarts. Nothing you ask is written to a database.</dd>
 
     <dt>It cannot submit your work</dt>
     <dd>Submitting, uploading, attempting a quiz and changing a grade are blocked in code, not merely discouraged. It fetches, explains, quizzes and reminds. You hand in your own work.</dd>
@@ -243,21 +243,20 @@
 <section id="build"><div class="wrap">
   <h2>How it is built</h2>
   <div class="flow">WhatsApp  &rarr;  Twilio webhook  &rarr;  FastAPI on Cloud Run
-                              &rarr;  Gemini reads voice / image / PDF
-                              &rarr;  ADK agent (tool calling)
+                              &rarr;  ADK agent, Gemini tool calling
                                       &rarr;  e-learning REST API, per-student token
-                                      &rarr;  Playwright MCP, DOM first
-                                      &rarr;  vision fallback on screenshot
+                                      &rarr;  lecturer's slides and briefs,
+                                         read by Gemini at question time
                               &rarr;  reply, inline in the webhook</div>
   <dl>
     <dt>Grounded, not guessed</dt>
-    <dd>Course answers come from the lecturer's own slides and briefs, read at question time. Quiz questions are generated from those same files, so revision matches what is actually examined.</dd>
+    <dd>Course answers come from the lecturer's own slides and briefs, opened at question time and named in the reply. Quiz questions are written from those same files, so revision matches what is actually examined.</dd>
 
-    <dt>Multimodal in, plain language out</dt>
-    <dd>Gemini handles the audio, the image and the document directly &mdash; no separate speech or OCR service in the path.</dd>
+    <dt>It reads the course files, not a summary of them</dt>
+    <dd>PowerPoint, Word and PDF material is extracted and handed to Gemini with the student's question, so a topic explanation comes from the real deck rather than the model's general knowledge.</dd>
 
-    <dt>REST for coursework, browser for the open web</dt>
-    <dd>The e-learning platform allows one session per user, so driving it in a browser would log a student out mid-class. Coursework goes through its API; the browser tools are for any other site.</dd>
+    <dt>An API, not a browser</dt>
+    <dd>DOM-first browser automation over Playwright MCP was built first, with a screenshot-and-vision fallback. Then the platform turned out to expose a REST API &mdash; faster, structured, and crucially it does not consume the one session per user the site allows, so a student is never logged out of their own laptop and many students can use this at once. The browser stays in the repo, switched off, for sites with no API.</dd>
 
     <dt>Answers inside the webhook</dt>
     <dd>The reply is returned in the webhook response rather than sent through the messaging API, which trial accounts restrict to templates. Work is raced against that window: if it wins, the answer is immediate; if it loses, it finishes in the background and waits for <b>more</b>.</dd>
